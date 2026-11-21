@@ -1,19 +1,43 @@
 cmake_minimum_required(VERSION 3.20)
-
-project(LowLatencyTradingEngine
-    VERSION 1.0
-    LANGUAGES CXX
-)
+project(tickbook LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_executable(trading_engine
-    src/main.cpp
-)
+# -DTICKBOOK_SANITIZE=address | undefined | thread | address,undefined
+set(TICKBOOK_SANITIZE "" CACHE STRING "Sanitizers to enable")
 
-target_include_directories(trading_engine
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/include
-)
+add_library(tickbook INTERFACE)
+target_include_directories(tickbook INTERFACE include)
+target_compile_features(tickbook INTERFACE cxx_std_20)
+
+add_library(tickbook_flags INTERFACE)
+target_compile_options(tickbook_flags INTERFACE -Wall -Wextra -Wpedantic -Wshadow)
+if(TICKBOOK_SANITIZE)
+  target_compile_options(tickbook_flags INTERFACE -fsanitize=${TICKBOOK_SANITIZE} -fno-omit-frame-pointer -g)
+  target_link_options(tickbook_flags INTERFACE -fsanitize=${TICKBOOK_SANITIZE})
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+  find_package(GTest QUIET)
+  if(NOT GTest_FOUND)
+    include(FetchContent)
+    FetchContent_Declare(googletest
+      URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip)
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+  endif()
+  find_package(Threads REQUIRED)
+
+  add_executable(tickbook_tests
+    tests/test_fixed.cpp
+    tests/test_ring_buffer.cpp
+    tests/test_book_map.cpp
+    tests/test_sequencer.cpp)
+  target_link_libraries(tickbook_tests PRIVATE tickbook tickbook_flags GTest::gtest_main Threads::Threads)
+  include(GoogleTest)
+  gtest_discover_tests(tickbook_tests)
+endif()
