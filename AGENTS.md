@@ -264,7 +264,8 @@ Dockerfile*                  pinned toolchain
 - 2.4 DONE: `csv_to_bin` stream-parses the gzipped Tardis CSVs (book and trades), applies
   the rules in section 4, and writes the binary file. Parsing may allocate (offline tool);
   it uses `parse_fixed`, never `stod`/`strtod`.
-- 2.5 `BinaryReplay`: `mmap` the file, validate the header, yield events with zero copies and no allocation.
+- 2.5 DONE: `BinaryReplay` mmaps the file, validates the header, and yields event views
+  with no payload copies or per-event allocation.
 - 2.6 `replay` tool: producer thread -> ring -> consumer thread applying events to `BookMap`; golden-file and
   determinism tests; ASan/UBSan/TSan clean.
 - 2.7 CI/CD build-out per sections 5.1 to 5.3: fixtures, fuzz targets for the parsers and loaders written so far,

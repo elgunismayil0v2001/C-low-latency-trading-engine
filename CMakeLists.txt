@@ -48,7 +48,8 @@ if(BUILD_TESTING)
     tests/test_ring_buffer.cpp
     tests/test_book_map.cpp
     tests/test_sequencer.cpp
-    tests/test_csv_to_bin.cpp)
+    tests/test_csv_to_bin.cpp
+    tests/test_binary_replay.cpp)
   target_link_libraries(tickbook_tests PRIVATE tickbook tickbook_csv_converter tickbook_flags
                                                GTest::gtest_main Threads::Threads)
   include(GoogleTest)

@@ -5,10 +5,11 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestone 1 and milestones 2.1–2.4 are complete: diff-depth messages sequence and resync
-correctly; the 64-byte binary header is validated; and `csv_to_bin` streams and merges
-Tardis gzip CSVs into deterministic binary event files. Parser edge cases, invalid book
-quantities, message boundaries, and snapshot restarts are covered. 42 tests pass.
+Milestone 1 and milestones 2.1–2.5 are complete: diff-depth messages sequence and resync
+correctly; `csv_to_bin` streams and merges Tardis gzip CSVs; and `BinaryReplay` validates
+and memory-maps the resulting event files, exposing zero-copy views. Parser edge cases,
+invalid book quantities, message boundaries, snapshot restarts, and mapped-file validation
+are covered. 45 tests pass.
 
 ## Build and test
 
@@ -31,6 +32,10 @@ snapshot. Event flag bit 1 marks the first row after a transition into a snapsho
 the consumer to clear its book before applying that level. Tardis data remains local and
 is not included in the repository.
 
+`BinaryReplay` keeps event records as views into the mapped file. On Linux it requests
+`MAP_POPULATE` and locks the mapped pages; the process needs a locked-memory allowance
+large enough for the replay file.
+
 ## Design rules
 
 - Prices and quantities are `int64` fixed-point. No `double` on the hot path.
@@ -40,7 +45,7 @@ is not included in the repository.
 
 ## Roadmap
 
-1. Milestone 2.5–2.8: `mmap` replay, golden-file tests, CI build-out, synthetic generator and docs.
+1. Milestone 2.6–2.8: threaded replay, golden-file tests, CI build-out, synthetic generator and docs.
 2. Milestone 3: flat sorted vector and offset-array books, same interface as `BookMap`, benchmark all three.
 3. Milestone 4: latency histogram, allocation counter, perf flame graph, benchmark table here.
 4. Milestone 5: live recorder (WebSocket + REST snapshot), then the backtest engine.
