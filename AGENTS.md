@@ -360,7 +360,7 @@ Dockerfile*                  pinned toolchain
 - Final prediction horizon (primary 3 s; evaluate 1 s and 10 s).
 - Dead-zone `k` for the flat class.
 - Depth policy of the flat book: bounded top-N, default 4096 levels per side; a better level evicts the worst retained level.
-- SIMD inference selected from the measured scalar comparison; int8 remains undecided. The MLP uses 16 hidden units to fit the measured median p99 budget; validate predictive capacity against the roughly 32-unit plan when multi-day training data is available.
+- SIMD inference selected from the measured scalar comparison; int8 remains undecided. The MLP uses 16 hidden units to fit the measured median p99 budget. On the 2019-12-01 held-out day, direction hit rate was below both baselines and return hit rate was 1.15 percentage points above logistic; use additional held-out days before deciding whether to revisit the roughly 32-unit plan or claim an edge.
 - Per-event latency budget: 500 ns/event at p99 for ring pop through book update, feature update, and signal; NN
   inference shares the same budget.
 - Networking library for milestone 8.

@@ -15,10 +15,10 @@ local gate script, and a pinned Ubuntu toolchain. Current AppleClang plain, ASan
 TSan runs each pass all 93 tests. The milestone 6 utility sources pass targeted clang-tidy;
 the project-wide static script still reports existing warning-as-error findings in unrelated
 book, sequencing and converter code. All five 60-second parser and weights-loader fuzz smoke targets
-pass locally. The Ubuntu workflow jobs have not run here. The local Python suite passes 8 tests;
-its PyTorch parity test is skipped because PyTorch is not installed on this Mac. CI installs
-PyTorch and runs parity. The available real-data sample covers one UTC day, so training correctly
-requires additional days before it can produce a walk-forward model.
+pass locally. The Ubuntu workflow jobs have not run here. After installing the training packages,
+the local Python suite passes all 9 tests, including C++/PyTorch parity. Three monthly sample days
+now support one walk-forward test fold; its results are reported below and are not enough to claim
+a stable edge.
 
 ## Build and test
 
@@ -247,9 +247,26 @@ Example workflow (training requires labelled dumps from at least three distinct 
       BTCUSDT-2020-02-01.tfl --task direction --output-dir model
     python python/export_weights.py model/checkpoint.npz model/weights.bin
 
+The local 3-second direction and return models used BTCUSDT samples from 2019-10-01 and
+2019-11-01 for training, with 2019-12-01 held out. This was one expanding fold with 1,522,723
+training rows and 820,028 test rows from 2,342,751 total samples; training used seed 42 and 20
+epochs. Results on the held-out day:
+
+| Task | MLP directional hit rate | `imbalance_l1` sign baseline | Logistic all-feature baseline | Other MLP metrics |
+| --- | ---: | ---: | ---: | --- |
+| Direction | 51.72% (51.66% overall accuracy) | 55.64% | 64.52% | — |
+| Return | 65.34% | 55.50% | 64.19% | MAE 86.37 ticks; RMSE 143.89 ticks |
+
+The direction model fell below both baselines. The return model was 1.15 percentage points above
+the logistic hit rate on this one held-out day. One test day does not establish a repeatable edge;
+fees, execution and significance across independent days have not been evaluated. The trained
+checkpoints, metrics and exported weights are kept under `/private/tmp/tickbook-m6-training` and
+were not added to the repository.
+
 The committed tiny weights are deterministic synthetic test data, not trained trading weights.
 The C++/PyTorch parity test compares 1,000 fixed vectors at `1e-5` tolerance. It is wired into the
-Python CI job; this local Mac skipped that check because PyTorch is unavailable.
+Python CI job and passed locally. I also checked 1,000 feature vectors against each trained model;
+both exported weights files passed the same PyTorch comparison tolerance.
 
 The measurements below use the deterministic tiny weights fixture (not a trained model). The
 standalone benchmark made 1,000,000 inference calls per run, with five runs per implementation.
@@ -293,10 +310,13 @@ To reproduce the inference and combined replay measurements on a Release build:
 Repeat each command five times; leave 5 seconds between standalone inference runs and 10 seconds
 between full replay runs to let the fanless M2 cool down.
 
-Training could not be run on the available one-day sample: the splitter requires at least three
-UTC days, and PyTorch is absent locally. No trained model or predictive result is claimed. The
-multi-day training and local PyTorch parity run remain to be repeated when those inputs are
-available.
+One additional validation run with the trained direction weights processed the held-out
+2019-12-01 replay: p50 27 ns, p99 447 ns, p99.9 575 ns, max 781,485 ns; 1,236,542 inference calls,
+zero hot-path allocations and zero process minor faults. The standalone trained direction model
+measured p50 27 ns, p99 69 ns and p99.9 111 ns over 1,000,000 calls in one run; the return model
+measured 28 ns, 71 ns and 111 ns respectively. These single-run checks confirm the exported
+weights load and meet the observed latency budget on this host; the five-run fixture benchmark
+above remains the repeated comparison.
 
 ## Allocation counter (milestone 4.2)
 
