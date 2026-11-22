@@ -5,10 +5,10 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestone 1 and milestones 2.1–2.3 are complete: diff-depth messages sequence and resync
-correctly; `Event` has explicit zeroed padding and a message-boundary flag; the 64-byte
-binary header has a validating zero-copy view; parser edge cases and invalid negative book
-quantities are covered. 38 tests pass.
+Milestone 1 and milestones 2.1–2.4 are complete: diff-depth messages sequence and resync
+correctly; the 64-byte binary header is validated; and `csv_to_bin` streams and merges
+Tardis gzip CSVs into deterministic binary event files. Parser edge cases, invalid book
+quantities, message boundaries, and snapshot restarts are covered. 42 tests pass.
 
 ## Build and test
 
@@ -17,6 +17,19 @@ quantities are covered. 38 tests pass.
     ctest --test-dir build --output-on-failure
 
 With sanitizers: add `-DTICKBOOK_SANITIZE=address,undefined` or `-DTICKBOOK_SANITIZE=thread`.
+Building `csv_to_bin` requires the system zlib development package.
+
+## CSV conversion
+
+    build/csv_to_bin --book BTCUSDT-book.csv.gz --trades BTCUSDT-trades.csv.gz \
+      --output BTCUSDT.bin --symbol BTCUSDT --price-scale 2 --qty-scale 8
+
+The trade file is optional. Inputs must be capture ordered. The converter stable-merges
+the rows by exchange timestamp, puts book rows before trade rows on ties, and marks the
+last row of each consecutive `local_timestamp` group. It skips book rows until the first
+snapshot. Event flag bit 1 marks the first row after a transition into a snapshot and tells
+the consumer to clear its book before applying that level. Tardis data remains local and
+is not included in the repository.
 
 ## Design rules
 
@@ -27,7 +40,7 @@ With sanitizers: add `-DTICKBOOK_SANITIZE=address,undefined` or `-DTICKBOOK_SANI
 
 ## Roadmap
 
-1. Milestone 2: CSV to binary converter, `mmap` replay, golden-file replay test.
+1. Milestone 2.5–2.8: `mmap` replay, golden-file tests, CI build-out, synthetic generator and docs.
 2. Milestone 3: flat sorted vector and offset-array books, same interface as `BookMap`, benchmark all three.
 3. Milestone 4: latency histogram, allocation counter, perf flame graph, benchmark table here.
 4. Milestone 5: live recorder (WebSocket + REST snapshot), then the backtest engine.

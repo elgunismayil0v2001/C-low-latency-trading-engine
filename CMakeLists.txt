@@ -20,6 +20,14 @@ if(TICKBOOK_SANITIZE)
   target_link_options(tickbook_flags INTERFACE -fsanitize=${TICKBOOK_SANITIZE})
 endif()
 
+find_package(ZLIB REQUIRED)
+
+add_library(tickbook_csv_converter STATIC tools/csv_to_bin.cpp)
+target_link_libraries(tickbook_csv_converter PUBLIC tickbook tickbook_flags ZLIB::ZLIB)
+
+add_executable(csv_to_bin tools/csv_to_bin_main.cpp)
+target_link_libraries(csv_to_bin PRIVATE tickbook_csv_converter tickbook_flags)
+
 include(CTest)
 if(BUILD_TESTING)
   find_package(GTest QUIET)
@@ -39,8 +47,10 @@ if(BUILD_TESTING)
     tests/test_fixed.cpp
     tests/test_ring_buffer.cpp
     tests/test_book_map.cpp
-    tests/test_sequencer.cpp)
-  target_link_libraries(tickbook_tests PRIVATE tickbook tickbook_flags GTest::gtest_main Threads::Threads)
+    tests/test_sequencer.cpp
+    tests/test_csv_to_bin.cpp)
+  target_link_libraries(tickbook_tests PRIVATE tickbook tickbook_csv_converter tickbook_flags
+                                               GTest::gtest_main Threads::Threads)
   include(GoogleTest)
   gtest_discover_tests(tickbook_tests)
 endif()

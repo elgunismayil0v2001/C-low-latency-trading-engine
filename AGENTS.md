@@ -261,8 +261,9 @@ Dockerfile*                  pinned toolchain
   message, an empty message, and a duplicate message. Add a reinit after `Resync`.
 - 2.2 DONE: `Event` explicit padding, `flags` field, binary file header and validating reader (section 4).
 - 2.3 DONE: The five CI and test gaps listed in section 1.
-- 2.4 `csv_to_bin`: stream-parse the gzipped Tardis CSVs (book and trades), apply the rules in section 4, write the
-  binary file. Parsing may allocate (offline tool); it must use `parse_fixed`, never `stod`/`strtod`.
+- 2.4 DONE: `csv_to_bin` stream-parses the gzipped Tardis CSVs (book and trades), applies
+  the rules in section 4, and writes the binary file. Parsing may allocate (offline tool);
+  it uses `parse_fixed`, never `stod`/`strtod`.
 - 2.5 `BinaryReplay`: `mmap` the file, validate the header, yield events with zero copies and no allocation.
 - 2.6 `replay` tool: producer thread -> ring -> consumer thread applying events to `BookMap`; golden-file and
   determinism tests; ASan/UBSan/TSan clean.
