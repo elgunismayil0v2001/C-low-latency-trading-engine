@@ -5,9 +5,11 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -31,6 +33,40 @@ using namespace tickbook;
 constexpr std::size_t kRingCapacity = 1024;
 constexpr std::size_t kOverheadSamples = 10'000;
 constexpr std::uint64_t kMaximumWindowTicks = 6'000'000;
+
+std::atomic<bool> allocation_tracking_enabled{};
+std::atomic<std::size_t> allocation_count{};
+
+void record_allocation() noexcept {
+  // Allocations are counted only after replay startup has completed.
+  if (allocation_tracking_enabled.load(std::memory_order_relaxed)) {
+    allocation_count.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+class AllocationTracking {
+public:
+  AllocationTracking() noexcept {
+    allocation_count.store(0, std::memory_order_relaxed);
+    allocation_tracking_enabled.store(true, std::memory_order_relaxed);
+  }
+
+  ~AllocationTracking() { static_cast<void>(stop()); }
+
+  AllocationTracking(const AllocationTracking&) = delete;
+  AllocationTracking& operator=(const AllocationTracking&) = delete;
+
+  [[nodiscard]] std::size_t stop() noexcept {
+    if (active_) {
+      allocation_tracking_enabled.store(false, std::memory_order_relaxed);
+      active_ = false;
+    }
+    return allocation_count.load(std::memory_order_relaxed);
+  }
+
+private:
+  bool active_{true};
+};
 
 enum class BookKind { Map, Flat, Offset };
 
@@ -219,6 +255,9 @@ template <OrderBook Book>
 #if defined(__linux__)
   producer_affinity_error = affinity.pin_producer(producer.native_handle());
 #endif
+  // Startup includes the warm-up, all preallocation, and thread creation. Track every
+  // allocation from the first replay event through producer and consumer completion.
+  AllocationTracking allocation_tracking;
   // The release starts the producer after its affinity result has been written.
   producer_start.store(true, std::memory_order_release);
 #if defined(__linux__)
@@ -256,6 +295,7 @@ template <OrderBook Book>
   }
   const bool got_after = ::getrusage(kUsageWho, &after) == 0;
   producer.join();
+  const auto measured_allocations = allocation_tracking.stop();
 
 #if defined(__linux__)
   affinity.restore_consumer();
@@ -269,6 +309,14 @@ template <OrderBook Book>
     error = "cannot read minor page-fault counters around measured replay";
     return false;
   }
+  if (selected_book == "map" && measured_allocations == 0) {
+    error = "BookMap allocation positive control did not allocate";
+    return false;
+  }
+  if (selected_book != "map" && measured_allocations != 0) {
+    error = "hot-path allocation count must be zero after startup";
+    return false;
+  }
   const auto minor_faults = after.ru_minflt - before.ru_minflt;
 
   const auto p50 = histogram.percentile_upper_ns(5000);
@@ -278,6 +326,8 @@ template <OrderBook Book>
             << "price_tick_fixed_point_units=" << price_tick << '\n'
             << "events=" << histogram.count() << '\n'
             << "warmup_events=" << warmup_events << '\n'
+            << "allocation_tracking=after_startup_done\n"
+            << "hot_path_allocations=" << measured_allocations << '\n'
             << "timer=steady_clock timer_overhead_ns=" << overhead_ns << '\n'
             << "p50_ns=" << (p50 ? std::to_string(*p50) : "n/a") << '\n'
             << "p99_ns=" << (p99 ? std::to_string(*p99) : "n/a") << '\n'
@@ -299,6 +349,40 @@ template <OrderBook Book>
 }
 
 } // namespace
+
+void* operator new(std::size_t size) {
+  if (void* memory = std::malloc(size == 0 ? 1 : size)) {
+    record_allocation();
+    return memory;
+  }
+  throw std::bad_alloc{};
+}
+
+void* operator new[](std::size_t size) { return ::operator new(size); }
+
+void operator delete(void* memory) noexcept { std::free(memory); }
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void* memory) noexcept { std::free(memory); }
+void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
+
+void* operator new(std::size_t size, std::align_val_t alignment) {
+  void* memory = nullptr;
+  const auto alignment_size = static_cast<std::size_t>(alignment);
+  if (posix_memalign(&memory, alignment_size, size == 0 ? alignment_size : size) != 0) {
+    throw std::bad_alloc{};
+  }
+  record_allocation();
+  return memory;
+}
+
+void* operator new[](std::size_t size, std::align_val_t alignment) {
+  return ::operator new(size, alignment);
+}
+
+void operator delete(void* memory, std::align_val_t) noexcept { std::free(memory); }
+void operator delete(void* memory, std::size_t, std::align_val_t) noexcept { std::free(memory); }
+void operator delete[](void* memory, std::align_val_t) noexcept { std::free(memory); }
+void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept { std::free(memory); }
 
 int main(int argc, char** argv) {
   if (argc == 2 && std::string_view(argv[1]) == "--help") {

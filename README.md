@@ -5,7 +5,7 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestones 1, 2.1–2.6, 2.8, and 3.1–3.3 are complete. Milestone 4.1 adds a Release-only
+Milestones 1, 2.1–2.6, 2.8, 3.1–3.3, and 4.2 are complete. Milestone 4.1 adds a Release-only
 per-event replay histogram; its Linux zero-minor-fault assertion still needs a Linux run.
 `compare_books` matched `BookMap`,
 `FlatBook`, and `OffsetArrayBook` after every event in the 2019-12-01 Binance BTCUSDT replay
@@ -96,6 +96,14 @@ events after one full warm-up pass. It reported p50 26 ns, p99 109 ns, p99.9 151
 exploratory run, not the five-run benchmark table required by milestone 4.3 and not trading
 latency.
 
+## Allocation counter (milestone 4.2)
+
+The Release replay benchmark replaces global `operator new` and counts allocations from the
+startup-done marker through producer and consumer completion. Flat and offset book runs fail on
+any hot-path allocation. The `BookMap` run must record at least one allocation as a positive
+control. The CI allocation job runs the benchmark on the same small deterministic fixture used by
+`alloc_check`.
+
 ## Order book layouts
 
 `BookMap` is the full-depth reference. `FlatBook` stores the best 4,096 levels per side by
@@ -158,8 +166,8 @@ do not establish a general speedup for the flat layout.
 
 ## Roadmap
 
-1. Milestones 3.1–3.3 complete; milestone 4.1 implemented, with a Linux zero-fault run pending.
-2. Milestone 4.2–4.4: allocation measurements, benchmark table/flame graph and latency budget.
+1. Milestones 3.1–3.3 and 4.2 complete; milestone 4.1 implemented, with a Linux zero-fault run pending.
+2. Milestones 4.3–4.4: benchmark table/flame graph and latency budget.
 3. Milestone 5: features, signal evaluation and out-of-sample baselines.
 4. Milestone 6: offline labels, training and C++ inference, only if the signal evaluation warrants it.
 5. Milestone 7: strategy interfaces, simulated exchange and metrics.

@@ -117,11 +117,15 @@ jobs:
         run: |
           cmake -S . -B build/alloc -DCMAKE_CXX_COMPILER=g++-13 \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_BUILD_TYPE=Release \
-            -DTICKBOOK_WARNINGS_AS_ERRORS=ON -DBUILD_TESTING=OFF
-          cmake --build build/alloc --target alloc_check --parallel
+            -DTICKBOOK_WARNINGS_AS_ERRORS=ON -DBUILD_TESTING=OFF \
+            -DTICKBOOK_BUILD_BENCHMARKS=ON
+          cmake --build build/alloc --target alloc_check replay_latency --parallel
           fixture_dir=$(mktemp -d)
           trap 'rm -rf "$fixture_dir"' EXIT
           build/alloc/alloc_check "$fixture_dir/replay-fixture.bin"
+          build/alloc/replay_latency "$fixture_dir/replay-fixture.bin" --book map
+          build/alloc/replay_latency "$fixture_dir/replay-fixture.bin" --book flat
+          build/alloc/replay_latency "$fixture_dir/replay-fixture.bin" --book offset
 
   coverage:
     runs-on: ubuntu-24.04

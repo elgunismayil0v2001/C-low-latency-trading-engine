@@ -290,9 +290,9 @@ Dockerfile*                  pinned toolchain
   A zero-fault Linux run remains unverified from this workspace.
   Measure and subtract the timer's own overhead; discard warm-up; replay from memory so file I/O is excluded.
   Use a monotonic cycle-accurate timer appropriate to the platform (`steady_clock` is the portable fallback).
-- 4.2 Allocation counter: replace global `operator new` in the benchmark binary and count allocations after a
-  "startup done" marker; the test fails if the count is not 0 on the hot path (the `BookMap` baseline is exempt and
-  must be shown to allocate, as evidence the counter works).
+- 4.2 DONE: `replay_latency` replaces global allocation operators and counts allocations after startup through the
+  full producer/ring/consumer replay. Flat and offset book runs fail on nonzero allocations; `BookMap` is required to
+  allocate as a positive control. The CI allocation job runs all three book variants on a deterministic fixture.
 - 4.3 Benchmark table in README: `BookMap` vs flat vs offset, same data, hardware and compiler stated, median of at
   least 5 runs. Add a `perf` flame graph for the best layout (Linux; document how to reproduce).
   Environment caveats to state in the README: the owner's Apple M2 Air is fanless and throttles under sustained load
