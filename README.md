@@ -1,18 +1,19 @@
 # tickbook
 
-C++20 tick-data replay, L2 order book and (later) backtest engine for crypto market data.
+C++20 tick-data replay, L2 order book and backtest engine for crypto market data.
 Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestones 1, 2.1–2.6, 2.8, 3.1–3.3, 4.2, 4.4, 5.1–5.3, and 6.1–6.6 are complete. Milestone 4.1 adds a Release-only
+Milestones 1, 2.1–2.6, 2.8, 3.1–3.3, 4.2, 4.4, 5.1–5.3, 6.1–6.6, and 7.1–7.3 are implemented. Milestone 4.1 adds a Release-only
 per-event replay histogram; its Linux zero-minor-fault assertion still needs a Linux run. The
 milestone 4.3 five-run comparison is recorded below; its Linux `perf` flame graph remains pending.
 `compare_books` matched `BookMap`,
 `FlatBook`, and `OffsetArrayBook` after every event in the 2019-12-01 Binance BTCUSDT replay
 (6,907,104 events). Milestone 2.7 tooling is implemented: parser fuzz targets, CI gates, a
-local gate script, and a pinned Ubuntu toolchain. Current AppleClang plain, ASan/UBSan, and
-TSan runs each pass all 93 tests. The milestone 6 utility sources pass targeted clang-tidy;
+local gate script, and a pinned Ubuntu toolchain. AppleClang plain, ASan/UBSan, and TSan builds
+with warnings-as-errors each pass all 106 tests.
+The milestone 6 utility sources pass targeted clang-tidy;
 the project-wide static script still reports existing warning-as-error findings in unrelated
 book, sequencing and converter code. All five 60-second parser and weights-loader fuzz smoke targets
 pass locally. The Ubuntu workflow jobs have not run here. After installing the training packages,
@@ -259,7 +260,7 @@ epochs. Results on the held-out day:
 
 The direction model fell below both baselines. The return model was 1.15 percentage points above
 the logistic hit rate on this one held-out day. One test day does not establish a repeatable edge;
-fees, execution and significance across independent days have not been evaluated. The trained
+the simulated execution result is reported below, but independent-day evidence is still missing. The trained
 checkpoints, metrics and exported weights are kept under `/private/tmp/tickbook-m6-training` and
 were not added to the repository.
 
@@ -325,6 +326,61 @@ startup-done marker through producer and consumer completion. Flat and offset bo
 any hot-path allocation. The `BookMap` run must record at least one allocation as a positive
 control. The CI allocation job runs the benchmark on the same small deterministic fixture used by
 `alloc_check`.
+
+## Strategies, simulated exchange and backtest (milestone 7)
+
+`backtest` streams a validated binary replay through an `OffsetArrayBook`, `FeatureEngine`, a
+strategy and `SimExchange`. `ThresholdStrategy` trades the sign of `imbalance_l1`; `NnStrategy`
+trades either the return output (default threshold 1 tick) or direction-logit margin from a loaded
+MLP. Signal scores stay in Q20 fixed point. `--size` and `--max-position` are parsed at the replay
+file's quantity scale. The simulator is long-only Spot and rejects orders beyond either limit.
+
+    build/backtest BTCUSDT.bin --strategy threshold --latency-ms 5 --fee-ppm 1000 \
+      --price-tick 0.01 --size 0.001 --max-position 0.01
+    build/backtest BTCUSDT.bin --strategy nn --weights model/weights.bin --latency-ms 5 \
+      --fee-ppm 1000 --price-tick 0.01 --size 0.001 --max-position 0.01
+
+Market orders activate at `t + latency` and fill against the first complete message at or after
+that time. They walk the recorded opposite side, cancel any unfilled remainder, and do not change
+the replay book; the model has no market impact, collateral, liquidation or queue-position model.
+All simulated fills pay the configurable taker fee. The default is 1,000 ppm (0.10%, 10 bps),
+Binance's Regular User Spot taker rate without the optional BNB discount. See the current
+[Binance Spot fee schedule](https://www.binance.com/en/fee/trading) and
+[BNB fee-discount rules](https://www.binance.com/en/support/faq/detail/115000583311); account tier,
+region and discount eligibility can change the rate, so override `--fee-ppm` for an account-specific
+simulation. The quote ledger keeps six fractional digits beyond the binary file's price scale so
+small per-fill fees are not rounded up to cents.
+
+The output reports gross and fee-adjusted net mark-to-mid P&L, fees, turnover, closed round trips,
+average net P&L per closed trade in bps, hit rate, drawdown, break-even fee and a per-event replay
+processing histogram. Percentiles use the fixed log-linear buckets and subtract the measured
+`steady_clock` read overhead. This is replay processing time, not live or trading latency.
+
+For one local held-out day (Binance BTCUSDT 2019-12-01, 6,907,104 events and 1,236,542 messages),
+the 3-second return model with 5 ms simulated order latency and the default 10 bps taker fee had
+gross P&L -$148.90, fees $2,513.93, net P&L -$2,662.84, 20,545 closed trades and a 0% hit rate.
+At replay end the model still held 0.009 BTC and had 0.001 BTC of unfilled market quantity; P&L
+includes the open position marked to mid. The threshold baseline also lost net of fees. This single
+day is not evidence of profitability; these negative results do not establish an out-of-sample edge.
+
+The Release benchmark used the same held-out file and configuration, with one warm-up pass and five
+measured runs per strategy, separated by a 5-second cool-down. Hardware: Apple M2 MacBook Air, 8 GB,
+macOS 27.2.1; compiler: Apple LLVM 21.0.0; flags: `-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow`.
+Values are medians; parentheses give the min–max run range. The exact max includes host scheduling
+outliers. The p99 target from milestone 4.4 is 500 ns/event.
+
+| Strategy | p50 ns | p99 ns | p99.9 ns | max ns |
+| --- | ---: | ---: | ---: | ---: |
+| Threshold on `imbalance_l1` | 26 (25–27) | 367 (359–367) | 527 (487–543) | 796,360 (785,859–847,317) |
+| 3-second return MLP | 26 (24–26) | 447 (447–447) | 575 (575–623) | 811,818 (784,651–915,401) |
+
+Both repeated p99 medians fit the 500 ns target on this M2 host; the p99.9 medians exceed it.
+There is no Linux pinned-core run yet. With all other code held at the final version, one
+threshold replay p99 fell from 959 ns without the checked fast path to 407 ns with it, with
+identical fills and P&L; the five-run fast-path median p99 was 367 ns. The slow wide division
+remains for values whose product overflows 64 bits. A temporary harness checked the wide arithmetic
+against 100,000 deterministic random products. The 106-test GoogleTest suite passed in plain,
+ASan/UBSan and TSan builds.
 
 ## Order book layouts
 
@@ -392,7 +448,8 @@ do not establish a general speedup for the flat layout.
 2. Milestone 4.3: five-run Mac comparison complete; Linux x86 comparison and `perf` flame graph pending.
 3. Milestone 5: feature engine, versioned feature dump, and walk-forward evaluation complete; validate across more days before model work.
 4. Milestone 6: offline labels, training and C++ inference, only after multi-day evaluation supports continuing.
-5. Milestone 7: strategy interfaces, simulated exchange and metrics.
+5. Milestone 7: strategy interfaces, simulated exchange and metrics complete; validate the result
+   over more independent days before continuing with strategy work.
 6. Milestone 8: manual live recorder and replay validation.
 
 See [AGENTS.md](AGENTS.md) for the full project brief, milestone checklist, and correctness gates.

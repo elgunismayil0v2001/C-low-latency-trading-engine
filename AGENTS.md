@@ -341,12 +341,12 @@ Dockerfile*                  pinned toolchain
 - 6.6 DONE: Benchmark inference per call; it must fit the section 4.4 budget or the design is not accepted.
 
 ### 7. Strategy and simulated exchange
-- 7.1 `IStrategy` implementations: threshold rule on the signal, then the NN signal (runtime Strategy pattern).
-- 7.2 `SimExchange`: orders are submitted at time `t` and become active at `t + latency` (configurable); market orders
+- 7.1 DONE: `IStrategy` implementations: threshold rule on the signal, then the NN signal (runtime Strategy pattern).
+- 7.2 DONE: `SimExchange`: orders are submitted at time `t` and become active at `t + latency` (configurable); market orders
   fill by walking the replay book at the active time (no market impact on the recorded data, stated in the report);
   fees configurable (set to the current Binance fee tier, verify before use); position and size limits; mark to mid.
   Optional later: passive orders with a documented queue-position model.
-- 7.3 `Metrics`: gross and net P&L, trade count, turnover, average P&L per trade in basis points against fees,
+- 7.3 DONE: `Metrics`: gross and net P&L, trade count, turnover, average P&L per trade in basis points against fees,
   max drawdown, hit rate, **break-even fee**, and the engine latency histogram. The report states plainly if the
   result is not distinguishable from zero given the sample size.
 

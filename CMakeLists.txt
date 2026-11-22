@@ -75,6 +75,10 @@ target_link_libraries(label_features PRIVATE tickbook_labeler tickbook_flags)
 add_executable(nn_parity tools/nn_parity_main.cpp)
 target_link_libraries(nn_parity PRIVATE tickbook tickbook_flags)
 
+add_executable(backtest tools/backtest_main.cpp)
+target_link_libraries(backtest PRIVATE tickbook tickbook_flags)
+target_compile_options(backtest PRIVATE $<$<CONFIG:Release>:-O3> $<$<CONFIG:Release>:-DNDEBUG>)
+
 if(TICKBOOK_BUILD_BENCHMARKS)
   if(TICKBOOK_SANITIZE)
     message(FATAL_ERROR "Replay benchmarks must be built without sanitizers")
@@ -118,6 +122,9 @@ if(BUILD_TESTING)
     tests/test_eval_signals.cpp
     tests/test_label_features.cpp
     tests/test_mlp.cpp
+    tests/test_strategy.cpp
+    tests/test_metrics.cpp
+    tests/test_sim_exchange.cpp
     tests/test_binary_replay.cpp
     tests/test_replay.cpp)
   target_link_libraries(tickbook_tests PRIVATE tickbook tickbook_csv_converter
@@ -129,6 +136,7 @@ if(BUILD_TESTING)
     TICKBOOK_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   include(GoogleTest)
   gtest_discover_tests(tickbook_tests)
+  add_test(NAME backtest_help COMMAND backtest --help)
   if(DEFINED ENV{TMPDIR} AND NOT "$ENV{TMPDIR}" STREQUAL "")
     set(TICKBOOK_TEST_TMP_DIR "$ENV{TMPDIR}")
   else()
