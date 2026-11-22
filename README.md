@@ -5,8 +5,9 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestone 1 (this commit): fixed-point types and parser, SPSC lock-free ring buffer,
-`std::map` baseline order book, Binance diff-depth sequencer. 23 tests.
+Milestone 1 is complete. Milestone 2.1 is complete: the diff-depth sequencer processes
+each Binance message once, accepts overlapping update ranges, drops duplicates, detects
+gaps in empty messages, and can reset after a resync. 28 tests pass.
 
 ## Build and test
 
