@@ -14,7 +14,8 @@ enum class Side : std::uint8_t { Bid = 0, Ask = 1 };
 enum class EventType : std::uint8_t { BookUpdate = 0, Trade = 1, SnapshotLevel = 2 };
 
 inline constexpr std::uint8_t kEventFlagEndOfMessage = 1U << 0U; // Last level in a message.
-inline constexpr std::uint8_t kEventFlagSnapshotStart = 1U << 1U; // Clear book before this snapshot.
+inline constexpr std::uint8_t kEventFlagSnapshotStart = 1U
+                                                        << 1U; // Clear book before this snapshot.
 
 // One flattened price-level change (or trade). A Binance depth message with
 // several levels becomes several Events that share first_id / last_id.

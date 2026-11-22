@@ -268,7 +268,7 @@ Dockerfile*                  pinned toolchain
   with no payload copies or per-event allocation.
 - 2.6 DONE: `replay` streams events through a producer -> SPSC ring -> consumer applying
   them to `BookMap`; golden-file and determinism tests pass under ASan/UBSan/TSan.
-- 2.7 CI/CD build-out per sections 5.1 to 5.3: fixtures, fuzz targets for the parsers and loaders written so far,
+- 2.7 IN PROGRESS: CI/CD build-out per sections 5.1 to 5.3: fixtures, fuzz targets for the parsers and loaders written so far,
   `static`, `fuzz-smoke` and `alloc-check` jobs, `scripts/check.sh`, `Dockerfile`. Later milestones add their own
   fuzz targets, Python job and `bench`/release workflows when the code they cover exists.
 - 2.8 `tools/gen_synthetic` (deterministic synthetic Tardis-format data, used by tests and benchmarks) and docs:

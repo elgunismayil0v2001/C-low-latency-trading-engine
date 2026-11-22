@@ -17,13 +17,13 @@
 #include <zlib.h>
 
 #include "tickbook/binary_file.hpp"
+#include "tickbook/csv_line.hpp"
 #include "tickbook/fixed.hpp"
 #include "tickbook/types.hpp"
 
 namespace tickbook {
 namespace {
 
-constexpr std::size_t kCsvFieldCount = 8;
 constexpr std::size_t kGzipBufferSize = 16 * 1024;
 
 enum class CsvKind { Book, Trades };
@@ -101,53 +101,7 @@ private:
   std::string error_;
 };
 
-// Decode CSV quoting in place so every returned view stays inside the current line.
-bool split_csv_line(std::string& line, std::array<std::string_view, kCsvFieldCount>& fields) {
-  std::size_t read = 0;
-  std::size_t write = 0;
-  std::size_t count = 0;
-
-  for (;;) {
-    if (count == fields.size()) return false;
-    const std::size_t start = write;
-    if (read < line.size() && line[read] == '"') {
-      ++read;
-      bool closed = false;
-      while (read < line.size()) {
-        const char character = line[read++];
-        if (character != '"') {
-          line[write++] = character;
-          continue;
-        }
-        if (read < line.size() && line[read] == '"') {
-          line[write++] = '"';
-          ++read;
-          continue;
-        }
-        closed = true;
-        break;
-      }
-      if (!closed || (read < line.size() && line[read] != ',')) return false;
-    } else {
-      while (read < line.size() && line[read] != ',') {
-        if (line[read] == '"') return false;
-        line[write++] = line[read++];
-      }
-    }
-    fields[count++] = std::string_view(line.data() + start, write - start);
-    if (read == line.size()) return count == fields.size();
-    ++read; // comma
-    if (read == line.size()) {
-      if (count == fields.size() - 1) {
-        fields[count++] = std::string_view(line.data() + write, 0);
-        return count == fields.size();
-      }
-    }
-  }
-}
-
-template <typename Integer>
-bool parse_unsigned(std::string_view text, Integer& value) {
+template <typename Integer> bool parse_unsigned(std::string_view text, Integer& value) {
   if (text.empty()) return false;
   const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
   return result.ec == std::errc{} && result.ptr == text.data() + text.size();
@@ -155,7 +109,8 @@ bool parse_unsigned(std::string_view text, Integer& value) {
 
 bool parse_timestamp(std::string_view text, std::uint64_t& timestamp_us) {
   return parse_unsigned(text, timestamp_us) &&
-         timestamp_us <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max() / 1000);
+         timestamp_us <=
+             static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max() / 1000);
 }
 
 class TardisCsvReader {
@@ -166,7 +121,9 @@ public:
         qty_scale_(qty_scale) {}
 
   [[nodiscard]] bool is_open() const noexcept { return input_.is_open(); }
-  [[nodiscard]] const std::string& error() const noexcept { return error_.empty() ? input_.error() : error_; }
+  [[nodiscard]] const std::string& error() const noexcept {
+    return error_.empty() ? input_.error() : error_;
+  }
 
   ReadStatus next(CsvRecord& record) {
     std::string line;
@@ -189,8 +146,8 @@ public:
       ++line_number_;
       if (line.empty()) continue;
 
-      std::array<std::string_view, kCsvFieldCount> fields{};
-      if (!split_csv_line(line, fields)) {
+      std::array<std::string_view, csv_detail::kCsvFieldCount> fields{};
+      if (!csv_detail::split_csv_line(line, fields)) {
         error_ = row_error("invalid CSV row");
         return ReadStatus::Error;
       }
@@ -256,9 +213,7 @@ public:
       }
 
       if (!seen_snapshot_ && !is_snapshot) continue;
-      if (is_snapshot && !previous_is_snapshot_) {
-        parsed.event.flags |= kEventFlagSnapshotStart;
-      }
+      if (is_snapshot && !previous_is_snapshot_) { parsed.event.flags |= kEventFlagSnapshotStart; }
       parsed.event.type = is_snapshot ? EventType::SnapshotLevel : EventType::BookUpdate;
       seen_snapshot_ = true;
       previous_is_snapshot_ = is_snapshot;
@@ -268,10 +223,11 @@ public:
   }
 
 private:
-  bool valid_header(const std::array<std::string_view, kCsvFieldCount>& fields) const {
-    constexpr std::array<std::string_view, kCsvFieldCount> kBookHeader{
-        "exchange", "symbol", "timestamp", "local_timestamp", "is_snapshot", "side", "price", "amount"};
-    constexpr std::array<std::string_view, kCsvFieldCount> kTradesHeader{
+  bool valid_header(const std::array<std::string_view, csv_detail::kCsvFieldCount>& fields) const {
+    constexpr std::array<std::string_view, csv_detail::kCsvFieldCount> kBookHeader{
+        "exchange",    "symbol", "timestamp", "local_timestamp",
+        "is_snapshot", "side",   "price",     "amount"};
+    constexpr std::array<std::string_view, csv_detail::kCsvFieldCount> kTradesHeader{
         "exchange", "symbol", "timestamp", "local_timestamp", "id", "side", "price", "amount"};
     return fields == (kind_ == CsvKind::Book ? kBookHeader : kTradesHeader);
   }
@@ -342,14 +298,14 @@ CsvToBinaryResult convert_tardis_csv_to_binary(const CsvToBinaryConfig& config) 
     return failure("price and quantity scales must be in [0, 18]");
   }
 
-  TardisCsvReader book(config.book_csv_gz, CsvKind::Book, config.symbol,
-                       config.price_scale, config.qty_scale);
+  TardisCsvReader book(config.book_csv_gz, CsvKind::Book, config.symbol, config.price_scale,
+                       config.qty_scale);
   if (!book.is_open()) return failure(book.error());
 
   std::optional<TardisCsvReader> trades;
   if (config.trades_csv_gz) {
-    trades.emplace(*config.trades_csv_gz, CsvKind::Trades, config.symbol,
-                   config.price_scale, config.qty_scale);
+    trades.emplace(*config.trades_csv_gz, CsvKind::Trades, config.symbol, config.price_scale,
+                   config.qty_scale);
     if (!trades->is_open()) return failure(trades->error());
   }
 
@@ -401,9 +357,9 @@ CsvToBinaryResult convert_tardis_csv_to_binary(const CsvToBinaryConfig& config) 
   };
 
   while (book_status == ReadStatus::Row || trade_status == ReadStatus::Row) {
-    const bool take_book = book_status == ReadStatus::Row &&
-                           (trade_status != ReadStatus::Row ||
-                            book_record.timestamp_us <= trade_record.timestamp_us);
+    const bool take_book =
+        book_status == ReadStatus::Row &&
+        (trade_status != ReadStatus::Row || book_record.timestamp_us <= trade_record.timestamp_us);
     const CsvRecord current = take_book ? book_record : trade_record;
     if (have_pending) {
       if (pending_local_timestamp != current.local_timestamp_us) {
@@ -442,8 +398,8 @@ CsvToBinaryResult convert_tardis_csv_to_binary(const CsvToBinaryConfig& config) 
     }
   }
 
-  const auto header = make_binary_file_header(config.price_scale, config.qty_scale,
-                                              symbol, event_count);
+  const auto header =
+      make_binary_file_header(config.price_scale, config.qty_scale, symbol, event_count);
   output.seekp(0);
   output.write(reinterpret_cast<const char*>(header.data()),
                static_cast<std::streamsize>(header.size()));

@@ -11,9 +11,9 @@ inline constexpr std::size_t kCacheLine = 128;
 
 // Single-producer single-consumer lock-free queue. Capacity must be a power of two.
 // Exactly one thread may call try_push and exactly one other may call try_pop.
-template <typename T, std::size_t Capacity>
-class SpscRing {
-  static_assert(Capacity >= 2 && (Capacity & (Capacity - 1)) == 0, "Capacity must be a power of two");
+template <typename T, std::size_t Capacity> class SpscRing {
+  static_assert(Capacity >= 2 && (Capacity & (Capacity - 1)) == 0,
+                "Capacity must be a power of two");
 
 public:
   [[nodiscard]] bool try_push(const T& value) noexcept {

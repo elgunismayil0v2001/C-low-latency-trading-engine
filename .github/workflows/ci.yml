@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: ${{ matrix.compiler }} / ${{ matrix.sanitizer }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        sanitizer: [plain, address-undefined, thread]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchains and cache helper
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ccache g++-13 clang-18 zlib1g-dev
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-${{ matrix.compiler }}-${{ matrix.sanitizer }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.compiler }}-${{ matrix.sanitizer }}-
+      - name: Configure, build and test
+        env:
+          CCACHE_DIR: ~/.cache/ccache
+        run: |
+          if [ "${{ matrix.compiler }}" = "g++" ]; then
+            compiler=g++-13
+          else
+            compiler=clang++-18
+          fi
+          args=(-DCMAKE_CXX_COMPILER="$compiler" -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTICKBOOK_WARNINGS_AS_ERRORS=ON)
+          case "${{ matrix.sanitizer }}" in
+            plain) ;;
+            address-undefined) args+=(-DTICKBOOK_SANITIZE=address,undefined) ;;
+            thread) args+=(-DTICKBOOK_SANITIZE=thread) ;;
+          esac
+          cmake -S . -B build/ci "${args[@]}"
+          cmake --build build/ci --parallel
+          ctest --test-dir build/ci --output-on-failure
+
+  fuzz-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Clang and ccache
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ccache clang-18 libclang-rt-18-dev zlib1g-dev
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-fuzz-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-fuzz-
+      - name: Build libFuzzer targets
+        run: |
+          cmake -S . -B build/fuzz -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DBUILD_TESTING=OFF \
+            -DTICKBOOK_BUILD_FUZZERS=ON
+          cmake --build build/fuzz --parallel
+      - name: Run each committed corpus for 60 seconds
+        run: fuzz/run_smoke.sh build/fuzz 60
+
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install static tools and Clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ccache clang-18 clang-format-18 clang-tidy-18 \
+            g++-13 zlib1g-dev
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-static-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-static-
+      - name: Run format and clang-tidy checks
+        env:
+          CXX: clang++-18
+          CLANG_FORMAT: clang-format-18
+          CLANG_TIDY: clang-tidy-18
+        run: scripts/check-static.sh build/static
+
+  alloc-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Release compiler and ccache
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ccache g++-13 zlib1g-dev
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-alloc-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-alloc-
+      - name: Build allocation checker and replay a generated fixture
+        run: |
+          cmake -S . -B build/alloc -DCMAKE_CXX_COMPILER=g++-13 \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_BUILD_TYPE=Release \
+            -DTICKBOOK_WARNINGS_AS_ERRORS=ON -DBUILD_TESTING=OFF
+          cmake --build build/alloc --target alloc_check --parallel
+          fixture_dir=$(mktemp -d)
+          trap 'rm -rf "$fixture_dir"' EXIT
+          build/alloc/alloc_check "$fixture_dir/replay-fixture.bin"
+
+  coverage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GCC and coverage tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ccache g++-13 lcov zlib1g-dev
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-coverage-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-coverage-
+      - name: Build and collect header coverage
+        run: |
+          cmake -S . -B build/coverage -DCMAKE_CXX_COMPILER=g++-13 \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage
+          cmake --build build/coverage --parallel
+          ctest --test-dir build/coverage --output-on-failure
+          lcov --capture --directory build/coverage --output-file build/coverage/coverage.info
+          lcov --extract build/coverage/coverage.info '*/include/tickbook/*' \
+            --output-file build/coverage/include-coverage.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: include-coverage
+          path: build/coverage/include-coverage.info

@@ -103,15 +103,14 @@ public:
     }
   }
 
-  [[nodiscard]] static std::string system_error(std::string_view operation,
-                                                int error_code) {
+  [[nodiscard]] static std::string system_error(std::string_view operation, int error_code) {
     return std::string(operation) + ": " + std::strerror(error_code);
   }
 
 private:
   static bool read_topology(int cpu, std::string_view field, int& value) {
-    const std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
-                             "/topology/" + std::string(field);
+    const std::string path =
+        "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/" + std::string(field);
     std::ifstream input(path);
     return static_cast<bool>(input >> value);
   }
@@ -185,28 +184,28 @@ template <std::size_t RingCapacity = kReplayRingCapacity>
   std::thread producer;
   try {
 #if defined(__linux__)
-    producer = std::thread([&source, &ring, &producer_done, &produced, &producer_start,
-                            &producer_affinity_error]() {
+    producer = std::thread(
+        [&source, &ring, &producer_done, &produced, &producer_start, &producer_affinity_error]() {
 #else
     producer = std::thread([&source, &ring, &producer_done, &produced]() {
 #endif
 #if defined(__linux__)
-      // The acquire pairs with the startup release so the affinity result is visible.
-      while (!producer_start.load(std::memory_order_acquire)) std::this_thread::yield();
-      if (producer_affinity_error != 0) {
-        producer_done.store(true, std::memory_order_release);
-        return;
-      }
+          // The acquire pairs with the startup release so the affinity result is visible.
+          while (!producer_start.load(std::memory_order_acquire)) std::this_thread::yield();
+          if (producer_affinity_error != 0) {
+            producer_done.store(true, std::memory_order_release);
+            return;
+          }
 #endif
-      while (const auto view = source.next()) {
-        const Event event = view->copy();
-        while (!ring.try_push(event)) std::this_thread::yield();
-        ++produced;
-      }
-      // The release pairs with the consumer acquire so it cannot finish before the
-      // producer's final queue push has completed.
-      producer_done.store(true, std::memory_order_release);
-    });
+          while (const auto view = source.next()) {
+            const Event event = view->copy();
+            while (!ring.try_push(event)) std::this_thread::yield();
+            ++produced;
+          }
+          // The release pairs with the consumer acquire so it cannot finish before the
+          // producer's final queue push has completed.
+          producer_done.store(true, std::memory_order_release);
+        });
   } catch (const std::system_error& exception) {
 #if defined(__linux__)
     affinity.restore_consumer();
@@ -248,8 +247,8 @@ template <std::size_t RingCapacity = kReplayRingCapacity>
 #if defined(__linux__)
   affinity.restore_consumer();
   if (producer_affinity_error != 0) {
-    result.error = replay_detail::ReplayAffinity::system_error(
-        "cannot pin replay producer", producer_affinity_error);
+    result.error = replay_detail::ReplayAffinity::system_error("cannot pin replay producer",
+                                                               producer_affinity_error);
     return result;
   }
 #endif

@@ -61,8 +61,7 @@ public:
   }
 
 private:
-  template <typename Map>
-  static void update(Map& m, const Event& e) {
+  template <typename Map> static void update(Map& m, const Event& e) {
     if (e.qty == 0) m.erase(e.price);
     else m[e.price] = e.qty;
   }

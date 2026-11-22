@@ -80,9 +80,9 @@ inline void write_u64_le(BinaryFileHeaderBytes& out, std::size_t offset,
 
 } // namespace binary_file_detail
 
-[[nodiscard]] inline BinaryFileHeaderBytes make_binary_file_header(
-    std::int32_t price_scale, std::int32_t qty_scale, const std::array<char, 16>& symbol,
-    std::uint64_t event_count) noexcept {
+[[nodiscard]] inline BinaryFileHeaderBytes
+make_binary_file_header(std::int32_t price_scale, std::int32_t qty_scale,
+                        const std::array<char, 16>& symbol, std::uint64_t event_count) noexcept {
   BinaryFileHeaderBytes header{};
   for (std::size_t i = 0; i < kBinaryFileMagic.size(); ++i) {
     header[i] = static_cast<std::byte>(static_cast<unsigned char>(kBinaryFileMagic[i]));

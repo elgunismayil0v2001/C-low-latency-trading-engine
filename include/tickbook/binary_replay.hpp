@@ -29,6 +29,10 @@ namespace tickbook {
 // the owning BinaryReplay is closed, reopened, or destroyed.
 class BinaryEventView {
 public:
+  // Fixed extent bounds accessor reads; callers validate the enclosing file first.
+  explicit BinaryEventView(std::span<const std::byte, kBinaryEventSize> bytes) noexcept
+      : bytes_(bytes.data()) {}
+
   [[nodiscard]] std::span<const std::byte, kBinaryEventSize> bytes() const noexcept {
     return std::span<const std::byte, kBinaryEventSize>(bytes_, kBinaryEventSize);
   }
@@ -37,9 +41,7 @@ public:
   }
   [[nodiscard]] std::uint64_t first_id() const noexcept { return read_u64(8); }
   [[nodiscard]] std::uint64_t last_id() const noexcept { return read_u64(16); }
-  [[nodiscard]] Price price() const noexcept {
-    return std::bit_cast<Price>(read_u64(24));
-  }
+  [[nodiscard]] Price price() const noexcept { return std::bit_cast<Price>(read_u64(24)); }
   [[nodiscard]] Qty qty() const noexcept { return std::bit_cast<Qty>(read_u64(32)); }
   [[nodiscard]] EventType type() const noexcept {
     return static_cast<EventType>(std::to_integer<std::uint8_t>(bytes_[40]));
@@ -66,15 +68,11 @@ public:
     event.type = type();
     event.side = side();
     event.flags = flags();
-    for (std::size_t i = 0; i < std::size(event.padding); ++i) {
-      event.padding[i] = padding(i);
-    }
+    for (std::size_t i = 0; i < std::size(event.padding); ++i) { event.padding[i] = padding(i); }
     return event;
   }
 
 private:
-  explicit BinaryEventView(const std::byte* bytes) noexcept : bytes_(bytes) {}
-
   [[nodiscard]] std::uint64_t read_u64(std::size_t offset) const noexcept {
     std::uint64_t value = 0;
     for (std::size_t i = 0; i < sizeof(value); ++i) {
@@ -120,7 +118,7 @@ public:
       return false;
     }
 
-    struct stat info {};
+    struct stat info{};
     if (::fstat(descriptor, &info) != 0) {
       const int error_code = errno;
       ::close(descriptor);
@@ -194,7 +192,7 @@ public:
     if (mapping_ == nullptr || next_index_ >= file_view_.event_count) return std::nullopt;
     const auto* begin = file_view_.event_bytes.data() + next_index_ * kBinaryEventSize;
     ++next_index_;
-    return BinaryEventView(begin);
+    return BinaryEventView(std::span<const std::byte, kBinaryEventSize>(begin, kBinaryEventSize));
   }
 
   void rewind() noexcept { next_index_ = 0; }
@@ -208,8 +206,7 @@ public:
 
 private:
   [[nodiscard]] static std::string system_error(std::string_view operation,
-                                                const std::filesystem::path& path,
-                                                int error_code) {
+                                                const std::filesystem::path& path, int error_code) {
     return std::string(operation) + " '" + path.string() + "': " + std::strerror(error_code);
   }
 

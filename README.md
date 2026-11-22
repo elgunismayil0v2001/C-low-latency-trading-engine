@@ -5,10 +5,11 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestone 1 and milestones 2.1–2.6 are complete: `csv_to_bin` streams and merges Tardis
-gzip CSVs; `BinaryReplay` validates and memory-maps the event files; and `replay` applies
-them through an SPSC ring to `BookMap`. Golden-file checks cover the final book, event
-count, checksum, and repeat-run determinism. 48 tests pass.
+Milestone 1 and milestones 2.1–2.6 are complete. Milestone 2.7 tooling is implemented:
+parser fuzz targets, CI gates, a local gate script, and a pinned Ubuntu toolchain. The
+current AppleClang run passes 53 tests, including the synthetic allocation fixture. The
+Ubuntu workflow is configured for the GCC/Clang sanitizer matrix and the Linux-only fuzz
+and static-analysis gates; those hosted jobs have not yet run from this workspace.
 
 ## Build and test
 
@@ -18,6 +19,17 @@ count, checksum, and repeat-run determinism. 48 tests pass.
 
 With sanitizers: add `-DTICKBOOK_SANITIZE=address,undefined` or `-DTICKBOOK_SANITIZE=thread`.
 Building `csv_to_bin` requires the system zlib development package.
+
+Run the local gate set with `scripts/check.sh`. It builds and tests plain, ASan/UBSan, and
+TSan configurations, runs formatting and clang-tidy, runs Python tests when `python/tests`
+exists, then builds and runs the fuzz smoke corpora. The fuzzer targets cover `parse_fixed`,
+the converter's CSV record parser, binary headers/events, and `DiffSequencer`. Binary seeds
+are stored as hex text and materialized only in a temporary directory.
+
+The `alloc_check` test creates a deterministic 512-event fixture outside the repository.
+It counts allocations around mapped event reads and SPSC transfers, and uses a separate
+`BookMap` allocation as a positive control. `BookMap` remains exempt from the zero-allocation
+assertion because it is the `std::map` baseline.
 
 ## CSV conversion
 
@@ -52,10 +64,13 @@ distinct physical cores; macOS does not support this pinning path.
 
 ## Roadmap
 
-1. Milestone 2.7–2.8: CI build-out, synthetic generator and docs.
-2. Milestone 3: flat sorted vector and offset-array books, same interface as `BookMap`, benchmark all three.
-3. Milestone 4: latency histogram, allocation counter, perf flame graph, benchmark table here.
-4. Milestone 5: live recorder (WebSocket + REST snapshot), then the backtest engine.
+1. Milestone 2.8: deterministic synthetic generator and docs.
+2. Milestone 3: flat sorted-vector and offset-array books, same interface as `BookMap`.
+3. Milestone 4: latency histogram, allocation measurements, flame graph and benchmark table.
+4. Milestone 5: features, signal evaluation and out-of-sample baselines.
+5. Milestone 6: offline labels, training and C++ inference, only if the signal evaluation warrants it.
+6. Milestone 7: strategy interfaces, simulated exchange and metrics.
+7. Milestone 8: manual live recorder and replay validation.
 
 ## Limits
 
