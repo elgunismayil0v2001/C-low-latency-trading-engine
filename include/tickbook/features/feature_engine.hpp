@@ -287,15 +287,17 @@ public:
     update_ofi_windows(ofi, output);
     output.trade_flow_100ms = trade_flow_100ms_.as_int64();
     output.trade_flow_1s = trade_flow_1s_.as_int64();
-    if (has_mid && next_sample_sequence_ > oldest_sample_sequence_) {
+    if (has_mid && cursor_100ms_sequence_ < next_sample_sequence_) {
       const auto index100 = static_cast<std::size_t>(cursor_100ms_sequence_ & sample_mask());
-      const auto index1s = static_cast<std::size_t>(oldest_sample_sequence_ & sample_mask());
       const auto& old100 = time_samples_[index100];
-      const auto& old1s = time_samples_[index1s];
       if (old100.has_mid) {
         output.mid_return_100ms_q20_ticks = feature_detail::signed_price_return_q20(
             {mid2, old100.mid2_price, static_cast<std::uint64_t>(config_.price_tick)});
       }
+    }
+    if (has_mid && oldest_sample_sequence_ < next_sample_sequence_) {
+      const auto index1s = static_cast<std::size_t>(oldest_sample_sequence_ & sample_mask());
+      const auto& old1s = time_samples_[index1s];
       if (old1s.has_mid) {
         output.mid_return_1s_q20_ticks = feature_detail::signed_price_return_q20(
             {mid2, old1s.mid2_price, static_cast<std::uint64_t>(config_.price_tick)});

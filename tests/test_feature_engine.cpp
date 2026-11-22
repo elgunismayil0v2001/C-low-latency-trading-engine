@@ -161,6 +161,52 @@ TEST(FeatureEngine, ComputesTradeFlowAndMidReturnsOnEventTimeWindows) {
   EXPECT_EQ(engine.latest().values.trade_flow_1s, 4);
 }
 
+TEST(FeatureEngine, ReturnsZeroWhenWindowHasNoSamplesEvenWhenRingWraps) {
+  tickbook::FeatureEngine engine({1, 2});
+  tickbook::BookMap book;
+  const auto snapshot_bid =
+      event(0, tickbook::Side::Bid, 100, 3, tickbook::EventType::SnapshotLevel,
+            tickbook::kEventFlagSnapshotStart);
+  EXPECT_EQ(apply(engine, book, snapshot_bid).values.mid_return_100ms_q20_ticks, 0);
+  apply(engine, book, event(0, tickbook::Side::Ask, 102, 1, tickbook::EventType::SnapshotLevel));
+
+  const auto remove_initial_ask =
+      event(2'000'000'000, tickbook::Side::Ask, 102, 0, tickbook::EventType::BookUpdate, 0);
+  apply(engine, book, remove_initial_ask);
+  apply(engine, book,
+        event(2'000'000'000, tickbook::Side::Ask, 104, 1, tickbook::EventType::BookUpdate));
+
+  const auto remove_moved_ask =
+      event(2'500'000'000, tickbook::Side::Ask, 104, 0, tickbook::EventType::BookUpdate, 0);
+  apply(engine, book, remove_moved_ask);
+  apply(engine, book,
+        event(2'500'000'000, tickbook::Side::Ask, 106, 1, tickbook::EventType::BookUpdate));
+
+  EXPECT_EQ(engine.latest().values.mid_return_100ms_q20_ticks, 0);
+  EXPECT_EQ(engine.latest().values.mid_return_1s_q20_ticks, tickbook::kFeatureScale);
+
+  apply(engine, book,
+        event(4'000'000'000, tickbook::Side::Ask, 106, 0, tickbook::EventType::BookUpdate, 0));
+  apply(engine, book,
+        event(4'000'000'000, tickbook::Side::Ask, 108, 1, tickbook::EventType::BookUpdate));
+  EXPECT_EQ(engine.latest().values.mid_return_100ms_q20_ticks, 0);
+  EXPECT_EQ(engine.latest().values.mid_return_1s_q20_ticks, 0);
+}
+
+TEST(FeatureEngine, AGapLongerThanOneHundredMillisecondsHasNoHundredMillisecondReturn) {
+  tickbook::FeatureEngine engine({1, 8});
+  tickbook::BookMap book;
+  baseline(engine, book);
+
+  const auto moved_ask =
+      event(200'000'000, tickbook::Side::Ask, 101, 1, tickbook::EventType::BookUpdate);
+  book.apply(moved_ask);
+  ASSERT_EQ(engine.on_event(moved_ask, book), tickbook::FeatureUpdateResult::Updated);
+
+  EXPECT_EQ(engine.latest().values.mid_return_100ms_q20_ticks, 0);
+  EXPECT_EQ(engine.latest().values.mid_return_1s_q20_ticks, -tickbook::kFeatureScale / 2);
+}
+
 TEST(FeatureEngine, ReportsWindowCapacityAndRejectsBackwardsEventTime) {
   tickbook::FeatureEngine engine({1, 1});
   tickbook::BookMap book;
