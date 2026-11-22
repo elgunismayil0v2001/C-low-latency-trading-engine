@@ -285,7 +285,9 @@ Dockerfile*                  pinned toolchain
   from Binance BTCUSDT on 2019-12-01.
 
 ### 4. Measurement and proof of speed
-- 4.1 Latency histogram: preallocated log-linear buckets, record per-event processing time, report p50, p99, p99.9, max.
+- 4.1 IN PROGRESS: `bench/replay_latency` records ring-pop-to-book-apply times in a preallocated log-linear histogram and reports p50, p99, p99.9, max.
+  The Linux zero-minor-fault assertion is implemented; the macOS BTCUSDT run reported three process-scoped minor faults.
+  A zero-fault Linux run remains unverified from this workspace.
   Measure and subtract the timer's own overhead; discard warm-up; replay from memory so file I/O is excluded.
   Use a monotonic cycle-accurate timer appropriate to the platform (`steady_clock` is the portable fallback).
 - 4.2 Allocation counter: replace global `operator new` in the benchmark binary and count allocations after a

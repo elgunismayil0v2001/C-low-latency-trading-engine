@@ -5,11 +5,13 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestones 1, 2.1–2.6, 2.8, and 3.1–3.3 are complete. `compare_books` matched `BookMap`,
+Milestones 1, 2.1–2.6, 2.8, and 3.1–3.3 are complete. Milestone 4.1 adds a Release-only
+per-event replay histogram; its Linux zero-minor-fault assertion still needs a Linux run.
+`compare_books` matched `BookMap`,
 `FlatBook`, and `OffsetArrayBook` after every event in the 2019-12-01 Binance BTCUSDT replay
 (6,907,104 events). Milestone 2.7 tooling is implemented: parser fuzz targets, CI gates, a
 local gate script, and a pinned Ubuntu toolchain. Current AppleClang plain, ASan/UBSan, and
-TSan runs each pass all 70 tests. The Ubuntu workflow's Linux-only fuzz and static-analysis
+TSan runs each pass all 74 tests. The Ubuntu workflow's Linux-only fuzz and static-analysis
 gates have not yet run from this workspace.
 
 ## Build and test
@@ -69,6 +71,30 @@ checksum over the complete final book. It clears the book when it reaches a snap
 event. The replay uses a lossless producer-to-consumer SPSC ring; it yields while waiting
 for space or data outside latency measurement runs. Linux pins producer and consumer to
 distinct physical cores; macOS does not support this pinning path.
+
+## Latency histogram (milestone 4.1)
+
+Build the Release-only benchmark separately from sanitizer builds:
+
+    cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release \
+      -DTICKBOOK_BUILD_BENCHMARKS=ON -DBUILD_TESTING=OFF
+    cmake --build build-bench --target replay_latency -j
+    build-bench/replay_latency BTCUSDT.bin --book map --price-tick 1
+
+`--book` accepts `map`, `flat`, or `offset`. The tool maps and pre-touches the event file,
+does one full warm-up replay, then times each successful ring pop through snapshot handling
+and book apply. It subtracts the average back-to-back `steady_clock` read overhead. The fixed
+histogram has exact 0–31 ns buckets and 32 sub-buckets per power of two above that; reported
+percentiles are the selected bucket's upper edge and `max_ns` is exact. Linux pins both threads,
+uses the replay mapping's `MAP_POPULATE`/`mlock` path, and fails if process minor faults are
+nonzero. macOS cannot pin threads; it reports process-wide minor faults without asserting zero.
+
+One measured `BookMap` pass over BTCUSDT 2019-12-01 on the Apple M2 MacBook Air (macOS 27.2.1),
+Apple LLVM 21.0.0, `-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow -Werror`, covered 6,907,104
+events after one full warm-up pass. It reported p50 26 ns, p99 109 ns, p99.9 151 ns, max
+61,734 ns, a 16 ns timer-overhead estimate, and 3 process-wide minor faults. This is one
+exploratory run, not the five-run benchmark table required by milestone 4.3 and not trading
+latency.
 
 ## Order book layouts
 
@@ -132,8 +158,8 @@ do not establish a general speedup for the flat layout.
 
 ## Roadmap
 
-1. Milestone 3 complete: 3.1–3.3; next is milestone 4's latency histogram and benchmark evidence.
-2. Milestone 4: latency histogram, allocation measurements, flame graph and benchmark table.
+1. Milestones 3.1–3.3 complete; milestone 4.1 implemented, with a Linux zero-fault run pending.
+2. Milestone 4.2–4.4: allocation measurements, benchmark table/flame graph and latency budget.
 3. Milestone 5: features, signal evaluation and out-of-sample baselines.
 4. Milestone 6: offline labels, training and C++ inference, only if the signal evaluation warrants it.
 5. Milestone 7: strategy interfaces, simulated exchange and metrics.

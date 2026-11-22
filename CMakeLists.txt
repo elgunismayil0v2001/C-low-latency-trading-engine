@@ -9,6 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # -DTICKBOOK_SANITIZE=address | undefined | thread | address,undefined
 set(TICKBOOK_SANITIZE "" CACHE STRING "Sanitizers to enable")
 option(TICKBOOK_BUILD_FUZZERS "Build libFuzzer parser targets (Clang only)" OFF)
+option(TICKBOOK_BUILD_BENCHMARKS "Build Release-only replay benchmarks" OFF)
 option(TICKBOOK_WARNINGS_AS_ERRORS "Treat project compiler warnings as errors" OFF)
 
 add_library(tickbook INTERFACE)
@@ -50,6 +51,15 @@ target_link_libraries(replay PRIVATE tickbook tickbook_flags Threads::Threads)
 add_executable(alloc_check tools/alloc_check.cpp)
 target_link_libraries(alloc_check PRIVATE tickbook tickbook_flags Threads::Threads)
 
+if(TICKBOOK_BUILD_BENCHMARKS)
+  if(TICKBOOK_SANITIZE)
+    message(FATAL_ERROR "Replay benchmarks must be built without sanitizers")
+  endif()
+  add_executable(replay_latency bench/replay_latency.cpp)
+  target_link_libraries(replay_latency PRIVATE tickbook tickbook_flags Threads::Threads)
+  target_compile_options(replay_latency PRIVATE -O3 -DNDEBUG)
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
   find_package(GTest QUIET)
@@ -74,6 +84,7 @@ if(BUILD_TESTING)
     tests/test_csv_to_bin.cpp
     tests/test_csv_line.cpp
     tests/test_gen_synthetic.cpp
+    tests/test_latency_histogram.cpp
     tests/test_binary_replay.cpp
     tests/test_replay.cpp)
   target_link_libraries(tickbook_tests PRIVATE tickbook tickbook_csv_converter
