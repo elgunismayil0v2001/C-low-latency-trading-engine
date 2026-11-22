@@ -5,11 +5,10 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestone 1 and milestones 2.1–2.5 are complete: diff-depth messages sequence and resync
-correctly; `csv_to_bin` streams and merges Tardis gzip CSVs; and `BinaryReplay` validates
-and memory-maps the resulting event files, exposing zero-copy views. Parser edge cases,
-invalid book quantities, message boundaries, snapshot restarts, and mapped-file validation
-are covered. 45 tests pass.
+Milestone 1 and milestones 2.1–2.6 are complete: `csv_to_bin` streams and merges Tardis
+gzip CSVs; `BinaryReplay` validates and memory-maps the event files; and `replay` applies
+them through an SPSC ring to `BookMap`. Golden-file checks cover the final book, event
+count, checksum, and repeat-run determinism. 48 tests pass.
 
 ## Build and test
 
@@ -36,6 +35,14 @@ is not included in the repository.
 `MAP_POPULATE` and locks the mapped pages; the process needs a locked-memory allowance
 large enough for the replay file.
 
+    build/replay BTCUSDT.bin
+
+`replay` reports the event count, final best levels and depth counts, plus a deterministic
+checksum over the complete final book. It clears the book when it reaches a snapshot-start
+event. The replay uses a lossless producer-to-consumer SPSC ring; it yields while waiting
+for space or data outside latency measurement runs. Linux pins producer and consumer to
+distinct physical cores; macOS does not support this pinning path.
+
 ## Design rules
 
 - Prices and quantities are `int64` fixed-point. No `double` on the hot path.
@@ -45,7 +52,7 @@ large enough for the replay file.
 
 ## Roadmap
 
-1. Milestone 2.6–2.8: threaded replay, golden-file tests, CI build-out, synthetic generator and docs.
+1. Milestone 2.7–2.8: CI build-out, synthetic generator and docs.
 2. Milestone 3: flat sorted vector and offset-array books, same interface as `BookMap`, benchmark all three.
 3. Milestone 4: latency histogram, allocation counter, perf flame graph, benchmark table here.
 4. Milestone 5: live recorder (WebSocket + REST snapshot), then the backtest engine.

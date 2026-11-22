@@ -42,6 +42,17 @@ public:
   [[nodiscard]] std::size_t bid_levels() const { return bids_.size(); }
   [[nodiscard]] std::size_t ask_levels() const { return asks_.size(); }
 
+  // Visit levels best-first without building a temporary container.
+  template <typename Visitor>
+  void visit_bids(Visitor&& visitor) const noexcept(noexcept(visitor(Price{}, Qty{}))) {
+    for (const auto& [price, qty] : bids_) visitor(price, qty);
+  }
+
+  template <typename Visitor>
+  void visit_asks(Visitor&& visitor) const noexcept(noexcept(visitor(Price{}, Qty{}))) {
+    for (const auto& [price, qty] : asks_) visitor(price, qty);
+  }
+
   // True if the book is crossed (best bid >= best ask): a sign of a sync error.
   [[nodiscard]] bool crossed() const {
     const auto b = best_bid();

@@ -21,12 +21,16 @@ if(TICKBOOK_SANITIZE)
 endif()
 
 find_package(ZLIB REQUIRED)
+find_package(Threads REQUIRED)
 
 add_library(tickbook_csv_converter STATIC tools/csv_to_bin.cpp)
 target_link_libraries(tickbook_csv_converter PUBLIC tickbook tickbook_flags ZLIB::ZLIB)
 
 add_executable(csv_to_bin tools/csv_to_bin_main.cpp)
 target_link_libraries(csv_to_bin PRIVATE tickbook_csv_converter tickbook_flags)
+
+add_executable(replay tools/replay_main.cpp)
+target_link_libraries(replay PRIVATE tickbook tickbook_flags Threads::Threads)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -39,8 +43,6 @@ if(BUILD_TESTING)
     set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
   endif()
-  find_package(Threads REQUIRED)
-
   add_executable(tickbook_tests
     tests/test_types.cpp
     tests/test_binary_file.cpp
@@ -49,7 +51,8 @@ if(BUILD_TESTING)
     tests/test_book_map.cpp
     tests/test_sequencer.cpp
     tests/test_csv_to_bin.cpp
-    tests/test_binary_replay.cpp)
+    tests/test_binary_replay.cpp
+    tests/test_replay.cpp)
   target_link_libraries(tickbook_tests PRIVATE tickbook tickbook_csv_converter tickbook_flags
                                                GTest::gtest_main Threads::Threads)
   include(GoogleTest)
