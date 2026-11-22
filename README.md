@@ -5,9 +5,10 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestone 1 and milestones 2.1–2.6 are complete. Milestone 2.7 tooling is implemented:
-parser fuzz targets, CI gates, a local gate script, and a pinned Ubuntu toolchain. The
-current AppleClang run passes 53 tests, including the synthetic allocation fixture. The
+Milestone 1, milestones 2.1–2.6, and the milestone 2.8 generator and documentation are
+complete. Milestone 2.7 tooling is implemented: parser fuzz targets, CI gates, a local gate
+script, and a pinned Ubuntu toolchain. Current AppleClang plain, ASan/UBSan, and TSan runs
+each pass all 55 tests, including the synthetic generator and allocation fixtures. The
 Ubuntu workflow is configured for the GCC/Clang sanitizer matrix and the Linux-only fuzz
 and static-analysis gates; those hosted jobs have not yet run from this workspace.
 
@@ -30,6 +31,18 @@ The `alloc_check` test creates a deterministic 512-event fixture outside the rep
 It counts allocations around mapped event reads and SPSC transfers, and uses a separate
 `BookMap` allocation as a positive control. `BookMap` remains exempt from the zero-allocation
 assertion because it is the `std::map` baseline.
+
+## Synthetic data
+
+`gen_synthetic` writes deterministic `incremental_book_L2.csv.gz` and `trades.csv.gz`
+files in Tardis format. It generates a five-level snapshot, seeded random-walk updates,
+level removals, and trades. Keep generated files outside the repository.
+
+    build/gen_synthetic --output-dir /tmp/tickbook-synthetic --seed 42 --messages 100
+    build/csv_to_bin --book /tmp/tickbook-synthetic/incremental_book_L2.csv.gz \
+      --trades /tmp/tickbook-synthetic/trades.csv.gz --output /tmp/tickbook-synthetic/events.bin \
+      --symbol BTCUSDT --price-scale 2 --qty-scale 8
+    build/replay /tmp/tickbook-synthetic/events.bin
 
 ## CSV conversion
 
@@ -62,15 +75,20 @@ distinct physical cores; macOS does not support this pinning path.
 - No heap allocation on the hot path (the `std::map` book is the baseline that breaks this on purpose).
 - The sequencer rules follow the Binance spot docs at the time of writing. Re-check them.
 
+## Architecture
+
+![tickbook architecture](docs/architecture.png)
+
 ## Roadmap
 
-1. Milestone 2.8: deterministic synthetic generator and docs.
-2. Milestone 3: flat sorted-vector and offset-array books, same interface as `BookMap`.
-3. Milestone 4: latency histogram, allocation measurements, flame graph and benchmark table.
-4. Milestone 5: features, signal evaluation and out-of-sample baselines.
-5. Milestone 6: offline labels, training and C++ inference, only if the signal evaluation warrants it.
-6. Milestone 7: strategy interfaces, simulated exchange and metrics.
-7. Milestone 8: manual live recorder and replay validation.
+1. Milestone 3: flat sorted-vector and offset-array books, same interface as `BookMap`.
+2. Milestone 4: latency histogram, allocation measurements, flame graph and benchmark table.
+3. Milestone 5: features, signal evaluation and out-of-sample baselines.
+4. Milestone 6: offline labels, training and C++ inference, only if the signal evaluation warrants it.
+5. Milestone 7: strategy interfaces, simulated exchange and metrics.
+6. Milestone 8: manual live recorder and replay validation.
+
+See [AGENTS.md](AGENTS.md) for the full project brief, milestone checklist, and correctness gates.
 
 ## Limits
 

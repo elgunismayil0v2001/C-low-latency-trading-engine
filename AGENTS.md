@@ -271,7 +271,7 @@ Dockerfile*                  pinned toolchain
 - 2.7 IN PROGRESS: CI/CD build-out per sections 5.1 to 5.3: fixtures, fuzz targets for the parsers and loaders written so far,
   `static`, `fuzz-smoke` and `alloc-check` jobs, `scripts/check.sh`, `Dockerfile`. Later milestones add their own
   fuzz targets, Python job and `bench`/release workflows when the code they cover exists.
-- 2.8 `tools/gen_synthetic` (deterministic synthetic Tardis-format data, used by tests and benchmarks) and docs:
+- 2.8 DONE: `tools/gen_synthetic` (deterministic synthetic Tardis-format data, used by tests and benchmarks) and docs:
   put the architecture diagram in `docs/architecture.png`, embed it in the README, link `AGENTS.md`, and keep the
   README roadmap in sync with section 7.
 
