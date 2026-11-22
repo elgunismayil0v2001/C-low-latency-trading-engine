@@ -45,6 +45,18 @@ TEST(BookMap, UpdateReplacesQuantity) {
   EXPECT_EQ(b.ask_levels(), 1u);
 }
 
+TEST(BookMap, IgnoresNegativeQuantity) {
+  BookMap b;
+  b.apply(upd(Side::Bid, 100, 5));
+  b.apply(upd(Side::Bid, 100, -1));
+  b.apply(upd(Side::Ask, 101, -2));
+
+  ASSERT_TRUE(b.best_bid().has_value());
+  EXPECT_EQ(b.best_bid()->qty, 5);
+  EXPECT_EQ(b.bid_levels(), 1u);
+  EXPECT_EQ(b.ask_levels(), 0u);
+}
+
 TEST(BookMap, IgnoresTrades) {
   BookMap b;
   Event t{0, 0, 0, 100, 7, EventType::Trade, Side::Bid};

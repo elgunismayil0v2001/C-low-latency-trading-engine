@@ -26,6 +26,7 @@ public:
   // Apply one level change. qty == 0 removes the level.
   void apply(const Event& e) {
     if (e.type == EventType::Trade) return;
+    if (e.qty < 0) return; // Negative absolute quantities are invalid level updates.
     if (e.side == Side::Bid) update(bids_, e);
     else update(asks_, e);
   }

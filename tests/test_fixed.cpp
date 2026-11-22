@@ -29,6 +29,25 @@ TEST(ParseFixed, AcceptsTrailingZerosBeyondScale) {
   EXPECT_EQ(v, 4300012);
 }
 
+TEST(ParseFixed, HandlesDotEdgesAndScaleZero) {
+  std::int64_t v = 0;
+  EXPECT_TRUE(parse("1.", 2, v));
+  EXPECT_EQ(v, 100);
+  EXPECT_TRUE(parse(".5", 2, v));
+  EXPECT_EQ(v, 50);
+
+  v = 17;
+  EXPECT_FALSE(parse("+1", 2, v));
+  EXPECT_EQ(v, 17);
+
+  EXPECT_TRUE(parse("42", 0, v));
+  EXPECT_EQ(v, 42);
+  EXPECT_TRUE(parse("42.0", 0, v));
+  EXPECT_EQ(v, 42);
+  EXPECT_FALSE(parse("42.1", 0, v));
+  EXPECT_EQ(v, 42);
+}
+
 TEST(ParseFixed, RejectsLostPrecision) {
   std::int64_t v = 0;
   EXPECT_FALSE(parse("1.123", 2, v));

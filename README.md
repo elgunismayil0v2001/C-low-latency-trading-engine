@@ -5,9 +5,10 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestone 1 is complete. Milestones 2.1 and 2.2 are complete: the diff-depth sequencer
-handles full messages and resyncs, and `Event` has explicit zeroed padding plus a message
-boundary flag. The 64-byte binary header has a validating zero-copy view. 36 tests pass.
+Milestone 1 and milestones 2.1–2.3 are complete: diff-depth messages sequence and resync
+correctly; `Event` has explicit zeroed padding and a message-boundary flag; the 64-byte
+binary header has a validating zero-copy view; parser edge cases and invalid negative book
+quantities are covered. 38 tests pass.
 
 ## Build and test
 
