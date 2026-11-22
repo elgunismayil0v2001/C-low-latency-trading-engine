@@ -5,17 +5,20 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestones 1, 2.1–2.6, 2.8, 3.1–3.3, 4.2, 4.4, and 5.1–5.3 are complete. Milestone 4.1 adds a Release-only
+Milestones 1, 2.1–2.6, 2.8, 3.1–3.3, 4.2, 4.4, 5.1–5.3, and 6.1–6.6 are complete. Milestone 4.1 adds a Release-only
 per-event replay histogram; its Linux zero-minor-fault assertion still needs a Linux run. The
 milestone 4.3 five-run comparison is recorded below; its Linux `perf` flame graph remains pending.
 `compare_books` matched `BookMap`,
 `FlatBook`, and `OffsetArrayBook` after every event in the 2019-12-01 Binance BTCUSDT replay
 (6,907,104 events). Milestone 2.7 tooling is implemented: parser fuzz targets, CI gates, a
 local gate script, and a pinned Ubuntu toolchain. Current AppleClang plain, ASan/UBSan, and
-TSan runs each pass all 86 tests. The new milestone 5 utility sources pass targeted clang-tidy;
+TSan runs each pass all 93 tests. The milestone 6 utility sources pass targeted clang-tidy;
 the project-wide static script still reports existing warning-as-error findings in unrelated
-book, sequencing and converter code. All four 60-second parser fuzz smoke targets pass locally
-with LLVM 23; the Ubuntu workflow jobs have not run here.
+book, sequencing and converter code. All five 60-second parser and weights-loader fuzz smoke targets
+pass locally. The Ubuntu workflow jobs have not run here. The local Python suite passes 8 tests;
+its PyTorch parity test is skipped because PyTorch is not installed on this Mac. CI installs
+PyTorch and runs parity. The available real-data sample covers one UTC day, so training correctly
+requires additional days before it can produce a walk-forward model.
 
 ## Build and test
 
@@ -29,8 +32,8 @@ Building `csv_to_bin` requires the system zlib development package.
 Run the local gate set with `scripts/check.sh`. It builds and tests plain, ASan/UBSan, and
 TSan configurations, runs formatting and clang-tidy, runs Python tests when `python/tests`
 exists, then builds and runs the fuzz smoke corpora. The fuzzer targets cover `parse_fixed`,
-the converter's CSV record parser, binary headers/events, and `DiffSequencer`. Binary seeds
-are stored as hex text and materialized only in a temporary directory.
+the converter's CSV record parser, binary headers/events, `DiffSequencer`, and weights loading.
+Binary seeds are stored as hex text and materialized only in a temporary directory.
 
 The `alloc_check` test creates a deterministic 512-event fixture outside the repository.
 It counts allocations around mapped event reads and SPSC transfers, and uses a separate
@@ -144,9 +147,9 @@ The original book-only baseline measures ring pop through book apply. The featur
 below extends it through feature update; signal evaluation and NN inference still need to be added
 before the full budget is verified. Recheck the target against pinned Linux x86 results when available.
 
-The five-run feature-path measurement below now includes the `FeatureEngine`: its median p99 was
-407 ns (run range 407–447 ns), leaving 53 ns under the p99 target for the signal stage at the
-worst observed p99. The measured path still excludes signal evaluation and NN inference.
+The five-run feature-path measurement below includes the `FeatureEngine`: its median p99 was
+407 ns (run range 407–447 ns), leaving 53 ns under the p99 target at the worst observed p99.
+Milestone 6 adds measured NN inference to this path; its results appear below.
 
 ### Feature path measurement (milestone 5)
 
@@ -211,6 +214,89 @@ block ranges were 59.03–73.03% at 1 s, 57.09–68.20% at 3 s, and 55.67–67.6
 preliminary results from one day, not evidence of a persistent edge or profitability; fees,
 execution and regime variation are not modeled. The positive single-day result is enough to
 continue to multi-day evaluation, but not to claim a strategy works.
+
+## Labeling, training and inference (milestone 6)
+
+`label_features` streams a `.tbf` feature dump into a versioned `.tfl` file. Direction labels are
+down=0, flat=1, up=2, with `abs(return_ticks) < k` as the flat class (`k=1` by default); return
+labels store the forward return in integer ticks. The label dump retains the timestamp and all 11
+features. Its header records symbol, horizon, label kind and dead-zone value.
+
+`python/train.py` combines labelled dumps in timestamp order and uses expanding walk-forward folds
+on whole UTC days. It purges training rows whose forward-label horizon reaches the test-day
+boundary and never shuffles. Direction training uses weighted cross-entropy; return training uses
+Huber loss. Each fold fits feature normalization from its training rows only. `metrics.json`
+records fold metrics against both the `imbalance_l1` sign baseline and logistic regression on all
+features. The final checkpoint uses the last fold's training split. It is exported to the validated
+little-endian `weights.bin` format with CRC32 and training-only normalization statistics.
+
+The inference model has 11 inputs, two 16-unit ReLU layers, and either one return output or three
+direction logits. Sixteen units were selected after measurement to keep the combined replay median
+p99 inside the 500 ns budget on this M2 sample; the tradeoff against the requested roughly 32-unit
+model remains open pending predictive evaluation on multiple days. C++ provides a scalar reference
+and automatically uses the SIMD implementation on NEON or SSE2 targets. Conversion from the
+fixed-point feature struct to normalized `float32` inputs happens in one function. Inference uses
+fixed-size storage and performs no allocation after loading weights.
+
+Example workflow (training requires labelled dumps from at least three distinct UTC days):
+
+    build/dump_features BTCUSDT.bin BTCUSDT-features.tbf --price-tick 1
+    build/label_features BTCUSDT-features.tbf BTCUSDT-3s-direction.tfl \
+      --kind direction --horizon 3 --dead-zone-ticks 1
+    python python/train.py --input BTCUSDT-2019-12-01.tfl BTCUSDT-2020-01-01.tfl \
+      BTCUSDT-2020-02-01.tfl --task direction --output-dir model
+    python python/export_weights.py model/checkpoint.npz model/weights.bin
+
+The committed tiny weights are deterministic synthetic test data, not trained trading weights.
+The C++/PyTorch parity test compares 1,000 fixed vectors at `1e-5` tolerance. It is wired into the
+Python CI job; this local Mac skipped that check because PyTorch is unavailable.
+
+The measurements below use the deterministic tiny weights fixture (not a trained model). The
+standalone benchmark made 1,000,000 inference calls per run, with five runs per implementation.
+The combined replay benchmark processed Binance BTCUSDT 2019-12-01 (6,907,104 events and
+1,236,542 message-boundary feature updates) with one warm-up and five measured runs. Hardware:
+Apple M2 MacBook Air, 8 GB, macOS 27.2.1; compiler: Apple LLVM 21.0.0; Release flags:
+`-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow`. Timer overhead is the median of 101 batches of
+64 back-to-back `steady_clock` pairs and is subtracted per observation. The M2 Air is fanless and
+cannot pin replay threads; run-to-run ranges and exact maxima reflect that environment. These are
+replay processing latencies, not trading latency.
+
+| Inference path | p50 ns | p99 ns | p99.9 ns |
+| --- | ---: | ---: | ---: |
+| Scalar MLP, 11-16-16-3 | 151 (125–151) | 279 (191–487) | 463 (231–575) |
+| SIMD MLP, 11-16-16-3 | 48 (25–57) | 97 (67–135) | 143 (135–175) |
+| Offset book + features + SIMD inference | 27 (26–27) | 487 (487–527) | 735 (623–863) |
+
+The SIMD inference median p99 was 65% lower than the scalar result for the same width and fixture.
+All five combined replay runs recorded zero hot-path allocations; process minor faults were 0–1
+on macOS. The combined median p99 is 13 ns below the 500 ns target, while two of five runs were
+at 527 ns, so the run range crosses the target. This M2 measurement supports the budget on median
+behavior, but pinned-core Linux confirmation remains pending. Combined exact maxima ranged from
+800,485 to 11,370,026 ns and are reported as scheduler and thermal outliers rather than used to
+set the per-event budget.
+
+A subsequent single-run validation of the final Release warning-as-error binaries processed the
+same input with zero allocations. The SIMD-only check measured p50 28 ns, p99 71 ns and p99.9
+111 ns over 1,000,000 calls, with zero process minor faults. The combined replay check measured
+p50 26 ns, p99 487 ns, p99.9 655 ns and max 857,734 ns; macOS reported four process minor faults.
+
+To reproduce the inference and combined replay measurements on a Release build:
+
+    cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release \
+      -DTICKBOOK_BUILD_BENCHMARKS=ON -DBUILD_TESTING=OFF
+    cmake --build build-bench --target nn_latency replay_latency -j
+    build-bench/nn_latency tests/data/tiny_weights.bin --model scalar --iterations 1000000
+    build-bench/nn_latency tests/data/tiny_weights.bin --model simd --iterations 1000000
+    build-bench/replay_latency /path/to/BTCUSDT.bin --book offset --price-tick 1 \
+      --weights tests/data/tiny_weights.bin
+
+Repeat each command five times; leave 5 seconds between standalone inference runs and 10 seconds
+between full replay runs to let the fanless M2 cool down.
+
+Training could not be run on the available one-day sample: the splitter requires at least three
+UTC days, and PyTorch is absent locally. No trained model or predictive result is claimed. The
+multi-day training and local PyTorch parity run remain to be repeated when those inputs are
+available.
 
 ## Allocation counter (milestone 4.2)
 

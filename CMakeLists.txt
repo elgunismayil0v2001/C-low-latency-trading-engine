@@ -9,7 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # -DTICKBOOK_SANITIZE=address | undefined | thread | address,undefined
 set(TICKBOOK_SANITIZE "" CACHE STRING "Sanitizers to enable")
 option(TICKBOOK_BUILD_FUZZERS "Build libFuzzer parser targets (Clang only)" OFF)
-option(TICKBOOK_BUILD_BENCHMARKS "Build Release-only replay benchmarks" OFF)
+option(TICKBOOK_BUILD_BENCHMARKS "Build Release-only latency benchmarks" OFF)
 option(TICKBOOK_WARNINGS_AS_ERRORS "Treat project compiler warnings as errors" OFF)
 
 add_library(tickbook INTERFACE)
@@ -65,6 +65,16 @@ target_link_libraries(tickbook_signal_evaluator PUBLIC tickbook tickbook_flags)
 add_executable(eval_signals tools/eval_signals_main.cpp)
 target_link_libraries(eval_signals PRIVATE tickbook_signal_evaluator tickbook_flags)
 
+add_library(tickbook_labeler STATIC tools/label_features.cpp)
+target_include_directories(tickbook_labeler PUBLIC tools)
+target_link_libraries(tickbook_labeler PUBLIC tickbook tickbook_flags)
+
+add_executable(label_features tools/label_features_main.cpp)
+target_link_libraries(label_features PRIVATE tickbook_labeler tickbook_flags)
+
+add_executable(nn_parity tools/nn_parity_main.cpp)
+target_link_libraries(nn_parity PRIVATE tickbook tickbook_flags)
+
 if(TICKBOOK_BUILD_BENCHMARKS)
   if(TICKBOOK_SANITIZE)
     message(FATAL_ERROR "Replay benchmarks must be built without sanitizers")
@@ -72,6 +82,9 @@ if(TICKBOOK_BUILD_BENCHMARKS)
   add_executable(replay_latency bench/replay_latency.cpp)
   target_link_libraries(replay_latency PRIVATE tickbook tickbook_flags Threads::Threads)
   target_compile_options(replay_latency PRIVATE -O3 -DNDEBUG)
+  add_executable(nn_latency bench/nn_latency.cpp)
+  target_link_libraries(nn_latency PRIVATE tickbook tickbook_flags)
+  target_compile_options(nn_latency PRIVATE -O3 -DNDEBUG)
 endif()
 
 include(CTest)
@@ -103,13 +116,17 @@ if(BUILD_TESTING)
     tests/test_feature_dump.cpp
     tests/test_dump_features.cpp
     tests/test_eval_signals.cpp
+    tests/test_label_features.cpp
+    tests/test_mlp.cpp
     tests/test_binary_replay.cpp
     tests/test_replay.cpp)
   target_link_libraries(tickbook_tests PRIVATE tickbook tickbook_csv_converter
                                                tickbook_synthetic_generator tickbook_feature_dumper
-                                               tickbook_signal_evaluator
+                                               tickbook_signal_evaluator tickbook_labeler
                                                tickbook_flags
                                                GTest::gtest_main Threads::Threads)
+  target_compile_definitions(tickbook_tests PRIVATE
+    TICKBOOK_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   include(GoogleTest)
   gtest_discover_tests(tickbook_tests)
   if(DEFINED ENV{TMPDIR} AND NOT "$ENV{TMPDIR}" STREQUAL "")
@@ -128,7 +145,7 @@ if(TICKBOOK_BUILD_FUZZERS)
     message(FATAL_ERROR "TICKBOOK_BUILD_FUZZERS requires Clang with libFuzzer")
   endif()
 
-  foreach(fuzzer IN ITEMS parse_fixed csv_line binary_file sequencer)
+  foreach(fuzzer IN ITEMS parse_fixed csv_line binary_file sequencer weights_loader)
     add_executable(fuzz_${fuzzer} fuzz/fuzz_${fuzzer}.cpp)
     target_link_libraries(fuzz_${fuzzer} PRIVATE tickbook)
     target_compile_options(fuzz_${fuzzer} PRIVATE

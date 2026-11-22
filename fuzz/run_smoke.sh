@@ -6,7 +6,7 @@ duration_seconds=${2:-60}
 fuzz_tmp=$(mktemp -d "${TMPDIR:-/tmp}/tickbook-fuzz.XXXXXX")
 trap 'rm -rf "$fuzz_tmp"' EXIT
 
-for name in parse_fixed csv_line binary_file sequencer; do
+for name in parse_fixed csv_line binary_file sequencer weights_loader; do
   corpus_dir="fuzz/corpus/${name}"
   prepared_dir="${fuzz_tmp}/${name}"
   mkdir -p "$prepared_dir"

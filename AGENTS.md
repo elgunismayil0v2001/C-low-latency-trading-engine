@@ -326,19 +326,19 @@ Dockerfile*                  pinned toolchain
   Always include two baselines: the sign of `imbalance_l1`, and logistic regression on all features.
   If nothing shows out-of-sample edge, stop and report the result; do not build more on top of it.
 
-### 6. Labelers, training, C++ inference
-- 6.1 `ILabeler` (offline, Strategy pattern):
+### 6. DONE: Labelers, training, C++ inference
+- 6.1 DONE: `ILabeler` (offline, Strategy pattern):
   - `DirectionLabeler`: 3 classes (down, flat, up); flat means |forward mid return| < `k` ticks (start `k = 1`, tune on training data only).
   - `ReturnLabeler`: regression on forward mid return in ticks.
   Both write the same dump format with a label-kind field. Labelers never appear in hot-path headers.
-- 6.2 `python/train.py`: PyTorch MLP (two hidden layers, about 32 units, ReLU). Cross-entropy with class weights for
+- 6.2 DONE: `python/train.py`: PyTorch MLP (two hidden layers, about 32 units, ReLU). Cross-entropy with class weights for
   direction, Huber loss for return. Walk-forward split by whole days in time order with purging of H at boundaries.
   Fixed seeds, config in a file, metrics written next to the weights. Must be compared against the section 5.3 baselines.
-- 6.3 `export_weights.py` -> `weights.bin` (section 4) with normalisation statistics from the training split only.
-- 6.4 C++ MLP inference: hand-written, float32, no allocation after load, scalar baseline first; an optional SIMD
+- 6.3 DONE: `export_weights.py` -> `weights.bin` (section 4) with normalisation statistics from the training split only.
+- 6.4 DONE: C++ MLP inference: hand-written, float32, no allocation after load, scalar baseline first; an optional SIMD
   or int8 variant only if benchmarked against the scalar one. Convert features to float in exactly one function.
-- 6.5 **Parity test:** C++ output matches PyTorch within 1e-5 on 1000 fixed vectors, run in CI from a committed tiny weights file.
-- 6.6 Benchmark inference per call; it must fit the section 4.4 budget or the design is not accepted.
+- 6.5 DONE: **Parity test:** C++ output matches PyTorch within 1e-5 on 1000 fixed vectors, run in CI from a committed tiny weights file.
+- 6.6 DONE: Benchmark inference per call; it must fit the section 4.4 budget or the design is not accepted.
 
 ### 7. Strategy and simulated exchange
 - 7.1 `IStrategy` implementations: threshold rule on the signal, then the NN signal (runtime Strategy pattern).
@@ -360,7 +360,7 @@ Dockerfile*                  pinned toolchain
 - Final prediction horizon (primary 3 s; evaluate 1 s and 10 s).
 - Dead-zone `k` for the flat class.
 - Depth policy of the flat book: bounded top-N, default 4096 levels per side; a better level evicts the worst retained level.
-- Whether to add int8 or SIMD inference.
+- SIMD inference selected from the measured scalar comparison; int8 remains undecided. The MLP uses 16 hidden units to fit the measured median p99 budget; validate predictive capacity against the roughly 32-unit plan when multi-day training data is available.
 - Per-event latency budget: 500 ns/event at p99 for ring pop through book update, feature update, and signal; NN
   inference shares the same budget.
 - Networking library for milestone 8.

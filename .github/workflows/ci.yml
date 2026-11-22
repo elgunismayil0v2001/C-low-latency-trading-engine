@@ -77,6 +77,30 @@ jobs:
       - name: Run each committed corpus for 60 seconds
         run: fuzz/run_smoke.sh build/fuzz 60
 
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: python/requirements.txt
+      - name: Install offline training and test dependencies
+        run: python -m pip install -r python/requirements.txt
+      - name: Build the C++ inference parity executable
+        run: |
+          cmake -S . -B build/python -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+            -DTICKBOOK_WARNINGS_AS_ERRORS=ON
+          cmake --build build/python --target nn_parity --parallel
+      - name: Run Python data, export and C++/PyTorch parity tests
+        env:
+          PYTHONPATH: python
+          TICKBOOK_NN_PARITY_BIN: build/python/nn_parity
+        run: python -m pytest python/tests
+
   static:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

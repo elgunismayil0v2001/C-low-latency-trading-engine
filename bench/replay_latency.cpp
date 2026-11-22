@@ -1,13 +1,17 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <new>
 #include <optional>
@@ -15,6 +19,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <vector>
 
 #include <sys/resource.h>
 
@@ -24,6 +29,7 @@
 #include "tickbook/books/offset_book.hpp"
 #include "tickbook/features/feature_engine.hpp"
 #include "tickbook/latency_histogram.hpp"
+#include "tickbook/nn/mlp.hpp"
 #include "tickbook/replay.hpp"
 #include "tickbook/ring_buffer.hpp"
 
@@ -32,7 +38,6 @@ namespace {
 using namespace tickbook;
 
 constexpr std::size_t kRingCapacity = 1024;
-constexpr std::size_t kOverheadSamples = 10'000;
 constexpr std::uint64_t kMaximumWindowTicks = 6'000'000;
 
 std::atomic<bool> allocation_tracking_enabled{};
@@ -69,7 +74,7 @@ private:
   bool active_{true};
 };
 
-enum class BookKind { Map, Flat, Offset };
+enum class BookKind : std::uint8_t { Map, Flat, Offset };
 
 [[nodiscard]] std::uint64_t timer_now_ns() noexcept {
   using Clock = std::chrono::steady_clock;
@@ -80,13 +85,20 @@ enum class BookKind { Map, Flat, Offset };
 }
 
 [[nodiscard]] std::uint64_t timer_overhead_ns() noexcept {
-  std::uint64_t total = 0;
-  for (std::size_t i = 0; i < kOverheadSamples; ++i) {
-    const auto start = timer_now_ns();
-    const auto finish = timer_now_ns();
-    total += finish - start;
+  constexpr std::size_t kBatches = 101;
+  constexpr std::size_t kPairsPerBatch = 64;
+  std::array<std::uint64_t, kBatches> samples{};
+  for (std::size_t i = 0; i < samples.size(); ++i) {
+    std::uint64_t total = 0;
+    for (std::size_t pair = 0; pair < kPairsPerBatch; ++pair) {
+      const auto start = timer_now_ns();
+      const auto finish = timer_now_ns();
+      total += finish - start;
+    }
+    samples[i] = total / kPairsPerBatch;
   }
-  return total / kOverheadSamples;
+  std::sort(samples.begin(), samples.end());
+  return samples[samples.size() / 2];
 }
 
 void cpu_pause() noexcept {
@@ -132,7 +144,28 @@ void touch_stack_pages() noexcept {
 
 void usage(std::ostream& output) {
   output << "Usage: replay_latency FILE.bin [--book map|flat|offset] [--price-tick UNITS] "
-            "[--features]\n";
+            "[--features] [--weights WEIGHTS.bin]\n";
+}
+
+[[nodiscard]] bool load_weights_file(const std::filesystem::path& path, nn::MlpModel& model,
+                                     std::string& error) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    error = "cannot open weights file '" + path.string() + "'";
+    return false;
+  }
+  std::vector<char> chars((std::istreambuf_iterator<char>(input)),
+                          std::istreambuf_iterator<char>());
+  std::vector<std::byte> bytes(chars.size());
+  for (std::size_t index = 0; index < chars.size(); ++index) {
+    bytes[index] = static_cast<std::byte>(static_cast<unsigned char>(chars[index]));
+  }
+  const auto load_error = nn::load_weights(bytes, model);
+  if (load_error != nn::WeightsLoadError::None) {
+    error = nn::weights_load_error_message(load_error);
+    return false;
+  }
+  return true;
 }
 
 struct PriceRange {
@@ -173,13 +206,22 @@ void apply_event(Book& book, const Event& event) noexcept(noexcept(book.apply(ev
 }
 
 template <OrderBook Book>
-std::uint64_t warm_up(BinaryReplay& source, Book& book, FeatureEngine* features) noexcept {
+std::uint64_t warm_up(BinaryReplay& source, Book& book, FeatureEngine* features,
+                      const nn::MlpModel* model, std::uint32_t& checksum) {
   source.rewind();
   std::uint64_t count = 0;
   while (const auto view = source.next()) {
     const auto event = view->copy();
     apply_event(book, event);
-    if (features != nullptr) static_cast<void>(features->on_event(event, book));
+    if (features != nullptr) {
+      const auto update = features->on_event(event, book);
+      if (model != nullptr && update == FeatureUpdateResult::Updated) {
+        const auto signal = model->infer(features->latest().values);
+        for (std::size_t index = 0; index < signal.count; ++index) {
+          checksum ^= std::bit_cast<std::uint32_t>(signal.values[index]);
+        }
+      }
+    }
     ++count;
   }
   book.clear();
@@ -190,12 +232,15 @@ std::uint64_t warm_up(BinaryReplay& source, Book& book, FeatureEngine* features)
 
 template <OrderBook Book>
 [[nodiscard]] bool measure_replay(BinaryReplay& source, Book& book, std::string_view selected_book,
-                                  Price price_tick, bool enable_features, std::string& error) {
+                                  Price price_tick, bool enable_features, const nn::MlpModel* model,
+                                  std::string& error) {
   touch_stack_pages();
   std::optional<FeatureEngine> feature_engine;
   if (enable_features)
     feature_engine.emplace(FeatureEngineConfig{price_tick, kDefaultFeatureTimeCapacity});
-  const auto warmup_events = warm_up(source, book, feature_engine ? &*feature_engine : nullptr);
+  std::uint32_t signal_checksum = 0;
+  const auto warmup_events =
+      warm_up(source, book, feature_engine ? &*feature_engine : nullptr, model, signal_checksum);
   SpscRing<Event, kRingCapacity> ring;
   LatencyHistogram histogram;
   histogram.reset();
@@ -289,6 +334,7 @@ template <OrderBook Book>
 
   std::uint64_t consumed = 0;
   std::uint64_t feature_messages = 0;
+  std::uint64_t signal_messages = 0;
   bool feature_update_failed = false;
   Event event{};
   for (;;) {
@@ -297,7 +343,16 @@ template <OrderBook Book>
       apply_event(book, event);
       if (feature_engine) {
         const auto update = feature_engine->on_event(event, book);
-        if (update == FeatureUpdateResult::Updated) ++feature_messages;
+        if (update == FeatureUpdateResult::Updated) {
+          ++feature_messages;
+          if (model != nullptr) {
+            const auto signal = model->infer(feature_engine->latest().values);
+            for (std::size_t index = 0; index < signal.count; ++index) {
+              signal_checksum ^= std::bit_cast<std::uint32_t>(signal.values[index]);
+            }
+            ++signal_messages;
+          }
+        }
         if (update == FeatureUpdateResult::InvalidConfiguration ||
             update == FeatureUpdateResult::InvalidTimestamp ||
             update == FeatureUpdateResult::TimeWindowCapacityExceeded) {
@@ -352,6 +407,9 @@ template <OrderBook Book>
             << "warmup_events=" << warmup_events << '\n'
             << "features=" << (feature_engine ? "enabled" : "disabled") << '\n'
             << "feature_messages=" << feature_messages << '\n'
+            << "nn_inference=" << (model != nullptr ? "enabled" : "disabled") << '\n'
+            << "nn_messages=" << signal_messages << '\n'
+            << "signal_checksum=" << signal_checksum << '\n'
             << "allocation_tracking=after_startup_done\n"
             << "hot_path_allocations=" << measured_allocations << '\n'
             << "timer=steady_clock timer_overhead_ns=" << overhead_ns << '\n'
@@ -410,7 +468,7 @@ void operator delete(void* memory, std::size_t, std::align_val_t) noexcept { std
 void operator delete[](void* memory, std::align_val_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept { std::free(memory); }
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
   if (argc == 2 && std::string_view(argv[1]) == "--help") {
     usage(std::cout);
     return 0;
@@ -424,6 +482,7 @@ int main(int argc, char** argv) {
   BookKind kind = BookKind::Map;
   Price price_tick = 1;
   bool enable_features = false;
+  std::filesystem::path weights_path;
   for (int i = 2; i < argc;) {
     const std::string_view option(argv[i]);
     if (option == "--features") {
@@ -449,6 +508,9 @@ int main(int argc, char** argv) {
         std::cerr << "replay_latency: price tick must be a positive integer\n";
         return 2;
       }
+    } else if (option == "--weights") {
+      weights_path = value;
+      enable_features = true;
     } else {
       usage(std::cerr);
       return 2;
@@ -462,6 +524,14 @@ int main(int argc, char** argv) {
     std::cerr << "replay_latency: " << error << '\n';
     return 1;
   }
+  std::optional<nn::MlpModel> model;
+  if (!weights_path.empty()) {
+    model.emplace();
+    if (!load_weights_file(weights_path, *model, error)) {
+      std::cerr << "replay_latency: " << error << '\n';
+      return 1;
+    }
+  }
   PriceRange range;
   std::size_t window_size = 1;
   if (!scan_price_range(source, price_tick, range, window_size, error)) {
@@ -473,17 +543,20 @@ int main(int argc, char** argv) {
   switch (kind) {
   case BookKind::Map: {
     BookMap book;
-    success = measure_replay(source, book, book_name(kind), price_tick, enable_features, error);
+    success = measure_replay(source, book, book_name(kind), price_tick, enable_features,
+                             model ? &*model : nullptr, error);
     break;
   }
   case BookKind::Flat: {
     FlatBook book;
-    success = measure_replay(source, book, book_name(kind), price_tick, enable_features, error);
+    success = measure_replay(source, book, book_name(kind), price_tick, enable_features,
+                             model ? &*model : nullptr, error);
     break;
   }
   case BookKind::Offset: {
     OffsetArrayBook book(window_size, price_tick);
-    success = measure_replay(source, book, book_name(kind), price_tick, enable_features, error);
+    success = measure_replay(source, book, book_name(kind), price_tick, enable_features,
+                             model ? &*model : nullptr, error);
     break;
   }
   }
@@ -492,4 +565,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   return 0;
+} catch (const std::exception& error) {
+  std::cerr << "replay_latency: " << error.what() << '\n';
+  return 1;
 }
