@@ -51,6 +51,20 @@ target_link_libraries(replay PRIVATE tickbook tickbook_flags Threads::Threads)
 add_executable(alloc_check tools/alloc_check.cpp)
 target_link_libraries(alloc_check PRIVATE tickbook tickbook_flags Threads::Threads)
 
+add_library(tickbook_feature_dumper STATIC tools/dump_features.cpp)
+target_include_directories(tickbook_feature_dumper PUBLIC tools)
+target_link_libraries(tickbook_feature_dumper PUBLIC tickbook tickbook_flags)
+
+add_executable(dump_features tools/dump_features_main.cpp)
+target_link_libraries(dump_features PRIVATE tickbook_feature_dumper tickbook_flags)
+
+add_library(tickbook_signal_evaluator STATIC tools/eval_signals.cpp)
+target_include_directories(tickbook_signal_evaluator PUBLIC tools)
+target_link_libraries(tickbook_signal_evaluator PUBLIC tickbook tickbook_flags)
+
+add_executable(eval_signals tools/eval_signals_main.cpp)
+target_link_libraries(eval_signals PRIVATE tickbook_signal_evaluator tickbook_flags)
+
 if(TICKBOOK_BUILD_BENCHMARKS)
   if(TICKBOOK_SANITIZE)
     message(FATAL_ERROR "Replay benchmarks must be built without sanitizers")
@@ -85,10 +99,16 @@ if(BUILD_TESTING)
     tests/test_csv_line.cpp
     tests/test_gen_synthetic.cpp
     tests/test_latency_histogram.cpp
+    tests/test_feature_engine.cpp
+    tests/test_feature_dump.cpp
+    tests/test_dump_features.cpp
+    tests/test_eval_signals.cpp
     tests/test_binary_replay.cpp
     tests/test_replay.cpp)
   target_link_libraries(tickbook_tests PRIVATE tickbook tickbook_csv_converter
-                                               tickbook_synthetic_generator tickbook_flags
+                                               tickbook_synthetic_generator tickbook_feature_dumper
+                                               tickbook_signal_evaluator
+                                               tickbook_flags
                                                GTest::gtest_main Threads::Threads)
   include(GoogleTest)
   gtest_discover_tests(tickbook_tests)

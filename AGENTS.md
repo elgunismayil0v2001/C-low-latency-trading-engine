@@ -301,12 +301,13 @@ Dockerfile*                  pinned toolchain
   (cool down between runs, report run-to-run spread), and macOS has no `perf` or core pinning (use Instruments or
   `samply` there). Authoritative pinned-core numbers and flame graphs come from Linux x86 (the pinned Docker image
   or a Linux machine); report macOS and Linux results in separate rows, never mixed.
-- 4.4 DONE: set the end-to-end hot-path budget to p99 <= 500 ns/event from the five-run OffsetArrayBook baseline
-  (median p99 28 ns, median p99.9 111 ns on Apple M2/macOS 27.2.1). Feature, signal, and inference work share this
-  budget and must be measured with the ring-pop-to-book path.
+- 4.4 DONE: set the end-to-end hot-path budget to p99 <= 500 ns/event. The five-run OffsetArrayBook plus FeatureEngine
+  measurement had median p99 407 ns (run range 407–447 ns) on Apple M2/macOS 27.2.1, leaving 53 ns at the worst
+  observed p99 for signal and inference. The measurement excludes those later stages; measure them with the same
+  ring-pop-to-book path.
 
 ### 5. Signal first: features and evaluation
-- 5.1 `FeatureEngine`: incremental O(1) per message, fixed-size output struct, no allocation. Features (K = 5 levels default):
+- 5.1 DONE: `FeatureEngine`: incremental O(1) per message, fixed-size output struct, no allocation. Features (K = 5 levels default):
   - `spread_ticks`.
   - `imbalance_l1` = (bid qty - ask qty) / (bid qty + ask qty) at the best level, and `imbalance_k` over the top K levels.
   - `microprice_offset` = microprice minus mid in ticks, with integer-exact arithmetic and documented rounding.
@@ -317,10 +318,10 @@ Dockerfile*                  pinned toolchain
   - `trade_flow_t` = signed traded quantity (aggressor buys minus sells) over rolling time windows (defaults 100 ms, 1 s).
   - `mid_return_t` = mid change in ticks over rolling time windows (defaults 100 ms, 1 s).
   Unit-test each feature against a hand-computed example.
-- 5.2 `dump_features`: sample the feature vector on a fixed time grid (default every 100 ms of event time), write
+- 5.2 DONE: `dump_features`: sample the feature vector on a fixed time grid (default every 100 ms of event time), write
   `(ts, features, forward mid returns for each horizon)` to a binary or Parquet file with a versioned header.
   Forward mid at horizon H = mid at the first sample with `ts >= t + H`; discard samples without one.
-- 5.3 `eval_signals`: for each feature and horizon in {1 s, 3 s, 10 s}, report information coefficient (Spearman),
+- 5.3 DONE: `eval_signals`: for each feature and horizon in {1 s, 3 s, 10 s}, report information coefficient (Spearman),
   hit rate on non-flat moves, and the decay curve; also report per-hour or per-day blocks so stability is visible.
   Always include two baselines: the sign of `imbalance_l1`, and logistic regression on all features.
   If nothing shows out-of-sample edge, stop and report the result; do not build more on top of it.

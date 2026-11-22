@@ -5,15 +5,17 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestones 1, 2.1–2.6, 2.8, 3.1–3.3, 4.2, and 4.4 are complete. Milestone 4.1 adds a Release-only
+Milestones 1, 2.1–2.6, 2.8, 3.1–3.3, 4.2, 4.4, and 5.1–5.3 are complete. Milestone 4.1 adds a Release-only
 per-event replay histogram; its Linux zero-minor-fault assertion still needs a Linux run. The
 milestone 4.3 five-run comparison is recorded below; its Linux `perf` flame graph remains pending.
 `compare_books` matched `BookMap`,
 `FlatBook`, and `OffsetArrayBook` after every event in the 2019-12-01 Binance BTCUSDT replay
 (6,907,104 events). Milestone 2.7 tooling is implemented: parser fuzz targets, CI gates, a
 local gate script, and a pinned Ubuntu toolchain. Current AppleClang plain, ASan/UBSan, and
-TSan runs each pass all 74 tests. The Ubuntu workflow's Linux-only fuzz and static-analysis
-gates have not yet run from this workspace.
+TSan runs each pass all 86 tests. The new milestone 5 utility sources pass targeted clang-tidy;
+the project-wide static script still reports existing warning-as-error findings in unrelated
+book, sequencing and converter code. All four 60-second parser fuzz smoke targets pass locally
+with LLVM 23; the Ubuntu workflow jobs have not run here.
 
 ## Build and test
 
@@ -138,9 +140,77 @@ The target is **p99 <= 500 ns/event** for ring pop, book update, feature update,
 evaluation; NN inference shares this total. The budget is based on the OffsetArrayBook baseline
 measured on the Apple M2 MacBook Air, macOS 27.2.1: median p99 28 ns and median p99.9 111 ns over
 five runs. The 500 ns target is about 4.5 times that measured p99.9, leaving room for later stages.
-The baseline currently measures only ring pop through book apply, so each later stage must be
-added to the same end-to-end measurement before it can be considered within budget. Recheck the
-target against the pinned Linux x86 results when those are available.
+The original book-only baseline measures ring pop through book apply. The feature-path measurement
+below extends it through feature update; signal evaluation and NN inference still need to be added
+before the full budget is verified. Recheck the target against pinned Linux x86 results when available.
+
+The five-run feature-path measurement below now includes the `FeatureEngine`: its median p99 was
+407 ns (run range 407–447 ns), leaving 53 ns under the p99 target for the signal stage at the
+worst observed p99. The measured path still excludes signal evaluation and NN inference.
+
+### Feature path measurement (milestone 5)
+
+`replay_latency --features` updates the same incremental feature engine after every book event,
+emitting a feature snapshot at each message boundary inside the measured loop. Warm-up also runs
+the feature engine, and every run reports allocation and process minor-fault counts. Five measured
+runs over BTCUSDT 2019-12-01 (6,907,104 events, 1,236,542 messages) used one complete warm-up and
+30 seconds between runs. Hardware: Apple M2 MacBook Air, 8 GB, macOS 27.2.1; compiler: Apple LLVM
+21.0.0; flags: `-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow -Werror`. Percentiles are replay
+ring-pop-through-book-and-feature processing times, with the measured timer overhead subtracted.
+
+| Book and feature path | p50 ns | p99 ns | p99.9 ns | Max ns |
+| --- | ---: | ---: | ---: | ---: |
+| `OffsetArrayBook` + `FeatureEngine` | 27 (27–27) | 407 (407–447) | 575 (527–735) | 775,277 (764,943–1,880,027) |
+
+The earlier book-only five-run table recorded p99 28 ns (28–109) and p99.9 111 ns (111–195).
+Adding feature updates raised these to p99 407 ns (407–447) and p99.9 575 ns (527–735).
+All five runs recorded zero hot-path allocations. Process-wide minor faults ranged from 0 to 2;
+macOS does not provide the Linux zero-fault assertion or core pinning. This one-machine result is
+not the authoritative pinned-core measurement, and the measured path does not yet include signal
+calculation or inference.
+
+### Feature generation and signal evaluation (milestone 5)
+
+The `FeatureEngine` is a fixed-point, incremental update after `OrderBook::apply`. It emits only
+after the event carrying the end-of-message flag. Imbalances, microprice offsets and returns use
+Q20 (`1 << 20`) with truncation toward zero; spread is in integer ticks, and OFI/trade flow remain
+in fixed-point quantity units. Defaults are top K=5, OFI windows 10/50/200 messages and time
+windows 100 ms/1 s. Its time-window ring is allocated at construction; the default capacity is
+262,144 messages. It rejects non-monotone event timestamps and reports capacity exhaustion instead
+of allocating on the hot path.
+
+`dump_features` samples at the first message at or after each 100 ms event-time grid point. Its
+versioned little-endian `.tbf` file stores Q20 feature records and forward mid returns at 1, 3 and
+10 seconds; each label uses the first later grid sample at or after the horizon. Incomplete final
+labels are dropped. The dump command streams the binary event input and keeps its output temporary
+until a successful completion. `eval_signals` validates the dump, reports per-feature Spearman IC
+and hit rate, and evaluates the sign of `imbalance_l1` plus expanding walk-forward logistic
+regression on all features. The logistic fit uses training-only normalization and purges training
+labels whose horizon reaches the first test timestamp; the three chronological splits do not
+shuffle rows. The IC and hit-rate results across 1/3/10 seconds form the decay series; output also
+includes hourly blocks.
+
+    build/dump_features BTCUSDT.bin BTCUSDT-features.tbf --price-tick 1
+    build/eval_signals BTCUSDT-features.tbf > BTCUSDT-evaluation.csv
+
+On the local Binance BTCUSDT 2019-12-01 sample, the dump contained 820,028 complete samples.
+Walk-forward evaluation tested 410,014 rows per horizon across three folds. The overall results
+were:
+
+| Horizon | Baseline | Spearman IC | Direction hit rate |
+| ---: | --- | ---: | ---: |
+| 1 s | sign of `imbalance_l1` | 0.165274 | 56.6571% |
+| 1 s | logistic regression | 0.426776 | 67.1497% |
+| 3 s | sign of `imbalance_l1` | 0.151228 | 55.6262% |
+| 3 s | logistic regression | 0.376478 | 64.9349% |
+| 10 s | sign of `imbalance_l1` | 0.112980 | 54.0027% |
+| 10 s | logistic regression | 0.253718 | 60.4877% |
+
+The logistic baseline's hit rate exceeded 50% in all 13 reported hourly blocks at each horizon;
+block ranges were 59.03–73.03% at 1 s, 57.09–68.20% at 3 s, and 55.67–67.63% at 10 s. These are
+preliminary results from one day, not evidence of a persistent edge or profitability; fees,
+execution and regime variation are not modeled. The positive single-day result is enough to
+continue to multi-day evaluation, but not to claim a strategy works.
 
 ## Allocation counter (milestone 4.2)
 
@@ -212,10 +282,10 @@ do not establish a general speedup for the flat layout.
 
 ## Roadmap
 
-1. Milestones 3.1–3.3, 4.2, and 4.4 complete; milestone 4.1 implemented, with a Linux zero-fault run pending.
+1. Milestones 3.1–3.3, 4.2, 4.4, and 5.1–5.3 complete; milestone 4.1 implemented, with a Linux zero-fault run pending.
 2. Milestone 4.3: five-run Mac comparison complete; Linux x86 comparison and `perf` flame graph pending.
-3. Milestone 5: features, signal evaluation and out-of-sample baselines.
-4. Milestone 6: offline labels, training and C++ inference, only if the signal evaluation warrants it.
+3. Milestone 5: feature engine, versioned feature dump, and walk-forward evaluation complete; validate across more days before model work.
+4. Milestone 6: offline labels, training and C++ inference, only after multi-day evaluation supports continuing.
 5. Milestone 7: strategy interfaces, simulated exchange and metrics.
 6. Milestone 8: manual live recorder and replay validation.
 

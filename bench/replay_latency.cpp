@@ -22,6 +22,7 @@
 #include "tickbook/book_map.hpp"
 #include "tickbook/books/flat_book.hpp"
 #include "tickbook/books/offset_book.hpp"
+#include "tickbook/features/feature_engine.hpp"
 #include "tickbook/latency_histogram.hpp"
 #include "tickbook/replay.hpp"
 #include "tickbook/ring_buffer.hpp"
@@ -130,7 +131,8 @@ void touch_stack_pages() noexcept {
 }
 
 void usage(std::ostream& output) {
-  output << "Usage: replay_latency FILE.bin [--book map|flat|offset] [--price-tick UNITS]\n";
+  output << "Usage: replay_latency FILE.bin [--book map|flat|offset] [--price-tick UNITS] "
+            "[--features]\n";
 }
 
 struct PriceRange {
@@ -170,23 +172,30 @@ void apply_event(Book& book, const Event& event) noexcept(noexcept(book.apply(ev
   book.apply(event);
 }
 
-template <OrderBook Book> std::uint64_t warm_up(BinaryReplay& source, Book& book) noexcept {
+template <OrderBook Book>
+std::uint64_t warm_up(BinaryReplay& source, Book& book, FeatureEngine* features) noexcept {
   source.rewind();
   std::uint64_t count = 0;
   while (const auto view = source.next()) {
-    apply_event(book, view->copy());
+    const auto event = view->copy();
+    apply_event(book, event);
+    if (features != nullptr) static_cast<void>(features->on_event(event, book));
     ++count;
   }
   book.clear();
+  if (features != nullptr) features->reset();
   source.rewind();
   return count;
 }
 
 template <OrderBook Book>
 [[nodiscard]] bool measure_replay(BinaryReplay& source, Book& book, std::string_view selected_book,
-                                  Price price_tick, std::string& error) {
+                                  Price price_tick, bool enable_features, std::string& error) {
   touch_stack_pages();
-  const auto warmup_events = warm_up(source, book);
+  std::optional<FeatureEngine> feature_engine;
+  if (enable_features)
+    feature_engine.emplace(FeatureEngineConfig{price_tick, kDefaultFeatureTimeCapacity});
+  const auto warmup_events = warm_up(source, book, feature_engine ? &*feature_engine : nullptr);
   SpscRing<Event, kRingCapacity> ring;
   LatencyHistogram histogram;
   histogram.reset();
@@ -279,11 +288,22 @@ template <OrderBook Book>
   const bool got_before = ::getrusage(kUsageWho, &before) == 0;
 
   std::uint64_t consumed = 0;
+  std::uint64_t feature_messages = 0;
+  bool feature_update_failed = false;
   Event event{};
   for (;;) {
     const auto start_ns = timer_now_ns();
     if (ring.try_pop(event)) {
       apply_event(book, event);
+      if (feature_engine) {
+        const auto update = feature_engine->on_event(event, book);
+        if (update == FeatureUpdateResult::Updated) ++feature_messages;
+        if (update == FeatureUpdateResult::InvalidConfiguration ||
+            update == FeatureUpdateResult::InvalidTimestamp ||
+            update == FeatureUpdateResult::TimeWindowCapacityExceeded) {
+          feature_update_failed = true;
+        }
+      }
       const auto finish_ns = timer_now_ns();
       histogram.record(latency_detail::subtract_timer_overhead(finish_ns - start_ns, overhead_ns));
       ++consumed;
@@ -303,6 +323,10 @@ template <OrderBook Book>
 
   if (produced != expected_events || consumed != expected_events) {
     error = "replay latency event counts do not match the binary file";
+    return false;
+  }
+  if (feature_update_failed) {
+    error = "feature engine rejected the replay event stream";
     return false;
   }
   if (!got_before || !got_after) {
@@ -326,6 +350,8 @@ template <OrderBook Book>
             << "price_tick_fixed_point_units=" << price_tick << '\n'
             << "events=" << histogram.count() << '\n'
             << "warmup_events=" << warmup_events << '\n'
+            << "features=" << (feature_engine ? "enabled" : "disabled") << '\n'
+            << "feature_messages=" << feature_messages << '\n'
             << "allocation_tracking=after_startup_done\n"
             << "hot_path_allocations=" << measured_allocations << '\n'
             << "timer=steady_clock timer_overhead_ns=" << overhead_ns << '\n'
@@ -389,7 +415,7 @@ int main(int argc, char** argv) {
     usage(std::cout);
     return 0;
   }
-  if (argc != 2 && argc != 4 && argc != 6) {
+  if (argc < 2) {
     usage(std::cerr);
     return 2;
   }
@@ -397,8 +423,18 @@ int main(int argc, char** argv) {
   const std::filesystem::path path(argv[1]);
   BookKind kind = BookKind::Map;
   Price price_tick = 1;
-  for (int i = 2; i < argc; i += 2) {
+  bool enable_features = false;
+  for (int i = 2; i < argc;) {
     const std::string_view option(argv[i]);
+    if (option == "--features") {
+      enable_features = true;
+      ++i;
+      continue;
+    }
+    if (i + 1 >= argc) {
+      usage(std::cerr);
+      return 2;
+    }
     const std::string_view value(argv[i + 1]);
     if (option == "--book") {
       if (value == "map") kind = BookKind::Map;
@@ -417,6 +453,7 @@ int main(int argc, char** argv) {
       usage(std::cerr);
       return 2;
     }
+    i += 2;
   }
 
   BinaryReplay source;
@@ -436,17 +473,17 @@ int main(int argc, char** argv) {
   switch (kind) {
   case BookKind::Map: {
     BookMap book;
-    success = measure_replay(source, book, book_name(kind), price_tick, error);
+    success = measure_replay(source, book, book_name(kind), price_tick, enable_features, error);
     break;
   }
   case BookKind::Flat: {
     FlatBook book;
-    success = measure_replay(source, book, book_name(kind), price_tick, error);
+    success = measure_replay(source, book, book_name(kind), price_tick, enable_features, error);
     break;
   }
   case BookKind::Offset: {
     OffsetArrayBook book(window_size, price_tick);
-    success = measure_replay(source, book, book_name(kind), price_tick, error);
+    success = measure_replay(source, book, book_name(kind), price_tick, enable_features, error);
     break;
   }
   }
