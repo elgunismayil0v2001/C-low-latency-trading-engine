@@ -20,14 +20,16 @@ namespace {
 using namespace tickbook;
 
 constexpr std::size_t kTopK = 5;
-constexpr std::uint64_t kMaximumWindow = 4'000'000;
+constexpr std::uint64_t kMaximumWindow = 6'000'000;
 
 struct TopK {
   std::array<Level, kTopK> levels{};
   std::size_t count{};
 
-  void operator()(Price price, Qty qty) noexcept {
-    if (count < levels.size()) levels[count++] = Level{price, qty};
+  [[nodiscard]] bool operator()(Price price, Qty qty) noexcept {
+    if (count == levels.size()) return false;
+    levels[count++] = Level{price, qty};
+    return count < levels.size();
   }
 };
 
@@ -43,10 +45,10 @@ template <OrderBook Left, OrderBook Right>
   TopK right_bids;
   TopK left_asks;
   TopK right_asks;
-  left.visit_bids([&left_bids](Price price, Qty qty) noexcept { left_bids(price, qty); });
-  right.visit_bids([&right_bids](Price price, Qty qty) noexcept { right_bids(price, qty); });
-  left.visit_asks([&left_asks](Price price, Qty qty) noexcept { left_asks(price, qty); });
-  right.visit_asks([&right_asks](Price price, Qty qty) noexcept { right_asks(price, qty); });
+  left.visit_bids([&left_bids](Price price, Qty qty) noexcept { return left_bids(price, qty); });
+  right.visit_bids([&right_bids](Price price, Qty qty) noexcept { return right_bids(price, qty); });
+  left.visit_asks([&left_asks](Price price, Qty qty) noexcept { return left_asks(price, qty); });
+  right.visit_asks([&right_asks](Price price, Qty qty) noexcept { return right_asks(price, qty); });
   if (left_bids.count != right_bids.count || left_asks.count != right_asks.count) return false;
   return std::equal(left_bids.levels.begin(), left_bids.levels.begin() + left_bids.count,
                     right_bids.levels.begin()) &&
@@ -107,7 +109,7 @@ int main(int argc, char** argv) {
         static_cast<std::uint64_t>(maximum_price) - static_cast<std::uint64_t>(minimum_price);
     const auto ticks = distance / static_cast<std::uint64_t>(price_tick);
     if (ticks >= kMaximumWindow) {
-      std::cerr << "compare_books: observed price span exceeds the 4000000-tick safety limit\n";
+      std::cerr << "compare_books: observed price span exceeds the 6000000-tick safety limit\n";
       return 1;
     }
     window_size = ticks + 1;

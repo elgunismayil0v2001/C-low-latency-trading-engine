@@ -5,12 +5,12 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestones 1, 2.1–2.6, 2.8, and 3.1–3.2 are complete. Milestone 3.3's differential test
-and comparison tool are implemented; replaying an actual Tardis day remains pending data
-availability. Milestone 2.7 tooling is implemented: parser fuzz targets, CI gates, a local
-gate script, and a pinned Ubuntu toolchain. Current AppleClang plain, ASan/UBSan, and TSan
-runs each pass all 67 tests. The Ubuntu workflow's Linux-only fuzz and static-analysis gates
-have not yet run from this workspace.
+Milestones 1, 2.1–2.6, 2.8, and 3.1–3.3 are complete. `compare_books` matched `BookMap`,
+`FlatBook`, and `OffsetArrayBook` after every event in the 2019-12-01 Binance BTCUSDT replay
+(6,907,104 events). Milestone 2.7 tooling is implemented: parser fuzz targets, CI gates, a
+local gate script, and a pinned Ubuntu toolchain. Current AppleClang plain, ASan/UBSan, and
+TSan runs each pass all 70 tests. The Ubuntu workflow's Linux-only fuzz and static-analysis
+gates have not yet run from this workspace.
 
 ## Build and test
 
@@ -49,12 +49,14 @@ level removals, and trades. Keep generated files outside the repository.
     build/csv_to_bin --book BTCUSDT-book.csv.gz --trades BTCUSDT-trades.csv.gz \
       --output BTCUSDT.bin --symbol BTCUSDT --price-scale 2 --qty-scale 8
 
-The trade file is optional. Inputs must be capture ordered. The converter stable-merges
-the rows by exchange timestamp, puts book rows before trade rows on ties, and marks the
-last row of each consecutive `local_timestamp` group. It skips book rows until the first
-snapshot. Event flag bit 1 marks the first row after a transition into a snapshot and tells
-the consumer to clear its book before applying that level. Tardis data remains local and
-is not included in the repository.
+The trade file is optional. The converter preserves capture order within each input stream.
+It clamps each stream's event time to its running maximum, then stable-merges by that clamped
+time, with book rows before trade rows on ties. It counts timestamp backsteps and reports
+the largest; a single backstep above `--max-backstep-ms` (default 1000) aborts conversion.
+The last row of each consecutive `local_timestamp` group receives the end-of-message flag.
+It skips book rows until the first snapshot. Event flag bit 1 marks the first row after a
+transition into a snapshot and tells the consumer to clear its book before applying that
+level. Tardis data remains local and is not included in the repository.
 
 `BinaryReplay` keeps event records as views into the mapped file. On Linux it requests
 `MAP_POPULATE` and locks the mapped pages; the process needs a locked-memory allowance
@@ -85,8 +87,15 @@ fixed-point price units when it is greater than one (the default is one):
 
     build/compare_books /path/to/day.bin --price-tick 1
 
-The validator rejects files whose price span exceeds four million ticks. The current
-workspace has only synthetic files; `compare_books` is ready for a local Tardis day binary.
+The validator rejects files whose price span exceeds six million ticks.
+
+On the final BookMap state from BTCUSDT 2019-12-01 (3,415 bid levels, 3,783 ask levels),
+the old full traversal averaged 51,832 ns per bid+ask top-five query (run range 46,388–53,535 ns);
+stopping each visitor after five levels averaged 7.02 ns (6.59–9.81 ns). Each median is
+from seven runs of 20,000 queries. Hardware: Apple M2 MacBook Air, macOS 27.2.1. Compiler:
+Apple LLVM 21.0.0, `-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow -Werror`. This is a
+batch-average visitor microbenchmark with the book already in memory, not replay event latency;
+runs were back-to-back without a cool-down.
 
 ### Preliminary book-apply microbenchmark
 
@@ -123,7 +132,7 @@ do not establish a general speedup for the flat layout.
 
 ## Roadmap
 
-1. Milestone 3 in progress: 3.1–3.2 are complete; run `compare_books` on a real Tardis day to complete 3.3.
+1. Milestone 3 complete: 3.1–3.3; next is milestone 4's latency histogram and benchmark evidence.
 2. Milestone 4: latency histogram, allocation measurements, flame graph and benchmark table.
 3. Milestone 5: features, signal evaluation and out-of-sample baselines.
 4. Milestone 6: offline labels, training and C++ inference, only if the signal evaluation warrants it.

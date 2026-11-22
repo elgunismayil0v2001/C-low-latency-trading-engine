@@ -14,11 +14,14 @@ struct CsvToBinaryConfig {
   std::string symbol{"BTCUSDT"};
   std::int32_t price_scale{2};
   std::int32_t qty_scale{8};
+  std::uint64_t max_backstep_ms{1000};
 };
 
 struct CsvToBinaryResult {
   bool success{};
   std::uint64_t event_count{};
+  std::uint64_t backstep_count{};
+  std::uint64_t largest_backstep_us{};
   std::string error;
 };
 

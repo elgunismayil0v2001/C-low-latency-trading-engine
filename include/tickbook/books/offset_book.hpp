@@ -68,7 +68,7 @@ public:
     for (std::size_t i = best_bid_index_ + 1; i > 0;) {
       --i;
       const auto slot = physical_index(i);
-      if (bids_[slot] != 0) visitor(price_at(i), bids_[slot]);
+      if (bids_[slot] != 0 && !visit_level(visitor, price_at(i), bids_[slot])) return;
     }
   }
 
@@ -77,7 +77,7 @@ public:
     if (best_ask_index_ == empty_index()) return;
     for (std::size_t i = best_ask_index_; i < asks_.size(); ++i) {
       const auto slot = physical_index(i);
-      if (asks_[slot] != 0) visitor(price_at(i), asks_[slot]);
+      if (asks_[slot] != 0 && !visit_level(visitor, price_at(i), asks_[slot])) return;
     }
   }
 

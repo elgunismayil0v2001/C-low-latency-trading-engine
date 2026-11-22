@@ -210,18 +210,92 @@ TEST(CsvToBin, RejectsPrecisionLossAndDoesNotPublishPartialOutput) {
   EXPECT_FALSE(std::filesystem::exists(config.output_file.string() + ".tmp"));
 }
 
-TEST(CsvToBin, RejectsOutOfOrderRows) {
+TEST(CsvToBin, ClampsBackstepsAndMergesCaptureOrderedStreamsByClampedTime) {
   TempFiles files;
   const std::string book =
       "exchange,symbol,timestamp,local_timestamp,is_snapshot,side,price,amount\n"
-      "binance,BTCUSDT,1000,1000,true,bid,100.00,1.0\n"
-      "binance,BTCUSDT,999,1001,false,bid,100.00,2.0\n";
+      "binance,BTCUSDT,2000,2000,true,bid,100.00,1.0\n"
+      "binance,BTCUSDT,2000,2000,true,ask,101.00,1.0\n"
+      "binance,BTCUSDT,1950,2050,false,bid,100.00,2.0\n";
+  const std::string trades = "exchange,symbol,timestamp,local_timestamp,id,side,price,amount\n"
+                             "binance,BTCUSDT,1990,1990,1,buy,100.00,0.5\n"
+                             "binance,BTCUSDT,2000,2000,2,sell,100.50,0.25\n";
+  ASSERT_TRUE(write_gzip(files.file("book.csv.gz"), book));
+  ASSERT_TRUE(write_gzip(files.file("trades.csv.gz"), trades));
+
+  auto config = config_for(files, files.file("clamped.bin"));
+  config.trades_csv_gz = files.file("trades.csv.gz");
+  const auto result = tickbook::convert_tardis_csv_to_binary(config);
+  ASSERT_TRUE(result.success) << result.error;
+  EXPECT_EQ(result.event_count, 5U);
+  EXPECT_EQ(result.backstep_count, 1U);
+  EXPECT_EQ(result.largest_backstep_us, 50U);
+
+  const auto bytes = read_bytes(config.output_file);
+  const auto first = read_event(bytes, 0);
+  const auto second = read_event(bytes, 1);
+  const auto third = read_event(bytes, 2);
+  const auto fourth = read_event(bytes, 3);
+  const auto fifth = read_event(bytes, 4);
+  EXPECT_EQ(first.type, tickbook::EventType::Trade);
+  EXPECT_EQ(first.ts_ns, 1'990'000);
+  EXPECT_EQ(second.type, tickbook::EventType::SnapshotLevel);
+  EXPECT_EQ(second.side, tickbook::Side::Bid);
+  EXPECT_EQ(third.type, tickbook::EventType::SnapshotLevel);
+  EXPECT_EQ(third.side, tickbook::Side::Ask);
+  EXPECT_EQ(fourth.type, tickbook::EventType::BookUpdate);
+  EXPECT_EQ(fourth.side, tickbook::Side::Bid);
+  EXPECT_EQ(fifth.type, tickbook::EventType::Trade);
+  EXPECT_EQ(fifth.ts_ns, 2'000'000);
+  EXPECT_EQ(second.ts_ns, 2'000'000);
+  EXPECT_EQ(third.ts_ns, 2'000'000);
+  EXPECT_EQ(fourth.ts_ns, 2'000'000);
+  EXPECT_NE(third.flags & tickbook::kEventFlagEndOfMessage, 0);
+  for (std::size_t i = 1; i < result.event_count; ++i) {
+    EXPECT_LE(read_event(bytes, i - 1).ts_ns, read_event(bytes, i).ts_ns);
+  }
+
+  auto repeated_config = config;
+  repeated_config.output_file = files.file("clamped-again.bin");
+  const auto repeated_result = tickbook::convert_tardis_csv_to_binary(repeated_config);
+  ASSERT_TRUE(repeated_result.success) << repeated_result.error;
+  EXPECT_EQ(read_bytes(repeated_config.output_file), bytes);
+  EXPECT_EQ(repeated_result.backstep_count, result.backstep_count);
+  EXPECT_EQ(repeated_result.largest_backstep_us, result.largest_backstep_us);
+}
+
+TEST(CsvToBin, AcceptsBackstepExactlyAtConfiguredLimit) {
+  TempFiles files;
+  const std::string book =
+      "exchange,symbol,timestamp,local_timestamp,is_snapshot,side,price,amount\n"
+      "binance,BTCUSDT,2000,2000,true,bid,100.00,1.0\n"
+      "binance,BTCUSDT,1000,2001,false,bid,100.00,2.0\n";
   ASSERT_TRUE(write_gzip(files.file("book.csv.gz"), book));
 
-  const auto config = config_for(files, files.file("bad-order.bin"));
+  auto config = config_for(files, files.file("at-limit.bin"));
+  config.max_backstep_ms = 1;
+  const auto result = tickbook::convert_tardis_csv_to_binary(config);
+  ASSERT_TRUE(result.success) << result.error;
+  EXPECT_EQ(result.backstep_count, 1U);
+  EXPECT_EQ(result.largest_backstep_us, 1000U);
+  EXPECT_EQ(read_event(read_bytes(config.output_file), 1).ts_ns, 2'000'000);
+}
+
+TEST(CsvToBin, RejectsBackstepAboveConfiguredLimit) {
+  TempFiles files;
+  const std::string book =
+      "exchange,symbol,timestamp,local_timestamp,is_snapshot,side,price,amount\n"
+      "binance,BTCUSDT,2000000,2000000,true,bid,100.00,1.0\n"
+      "binance,BTCUSDT,999999,2000001,false,bid,100.00,2.0\n";
+  ASSERT_TRUE(write_gzip(files.file("book.csv.gz"), book));
+
+  const auto config = config_for(files, files.file("too-far.bin"));
   const auto result = tickbook::convert_tardis_csv_to_binary(config);
   EXPECT_FALSE(result.success) << result.error;
-  EXPECT_NE(result.error.find("timestamp moved backwards"), std::string::npos) << result.error;
+  EXPECT_NE(result.error.find("timestamp backstep of 1000001 us"), std::string::npos)
+      << result.error;
+  EXPECT_NE(result.error.find("--max-backstep-ms 1000"), std::string::npos) << result.error;
+  EXPECT_FALSE(std::filesystem::exists(config.output_file));
 }
 
 TEST(CsvToBin, RequiresAnInitialSnapshot) {

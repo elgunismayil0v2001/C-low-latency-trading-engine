@@ -40,12 +40,16 @@ public:
   // Visit levels best-first without building a temporary container.
   template <typename Visitor>
   void visit_bids(Visitor&& visitor) const noexcept(noexcept(visitor(Price{}, Qty{}))) {
-    for (const auto& [price, qty] : bids_) visitor(price, qty);
+    for (const auto& [price, qty] : bids_) {
+      if (!visit_level(visitor, price, qty)) break;
+    }
   }
 
   template <typename Visitor>
   void visit_asks(Visitor&& visitor) const noexcept(noexcept(visitor(Price{}, Qty{}))) {
-    for (const auto& [price, qty] : asks_) visitor(price, qty);
+    for (const auto& [price, qty] : asks_) {
+      if (!visit_level(visitor, price, qty)) break;
+    }
   }
 
   // True if the book is crossed (best bid >= best ask): a sign of a sync error.

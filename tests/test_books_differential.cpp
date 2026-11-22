@@ -121,3 +121,43 @@ TEST(OrderBooks, BothOptimizedBooksMatchAfterClearAndSnapshotSizedUpdates) {
   EXPECT_TRUE(same_book(baseline, flat));
   EXPECT_TRUE(same_book(baseline, offset));
 }
+
+TEST(OrderBooks, VisitorsCanStopAfterTheRequestedTopLevels) {
+  BookMap baseline;
+  FlatBook flat(16);
+  OffsetArrayBook offset(64);
+  for (Price price = 100; price < 108; ++price) {
+    const Event bid{0, 0, 0, price, 1, EventType::BookUpdate, Side::Bid};
+    const Event ask{0, 0, 0, price + 20, 1, EventType::BookUpdate, Side::Ask};
+    baseline.apply(bid);
+    baseline.apply(ask);
+    flat.apply(bid);
+    flat.apply(ask);
+    offset.apply(bid);
+    offset.apply(ask);
+  }
+
+  const auto count_one_bid = [](const auto& book) {
+    std::size_t visited = 0;
+    book.visit_bids([&visited](Price, Qty) noexcept {
+      ++visited;
+      return false;
+    });
+    return visited;
+  };
+  const auto count_one_ask = [](const auto& book) {
+    std::size_t visited = 0;
+    book.visit_asks([&visited](Price, Qty) noexcept {
+      ++visited;
+      return false;
+    });
+    return visited;
+  };
+
+  EXPECT_EQ(count_one_bid(baseline), 1U);
+  EXPECT_EQ(count_one_bid(flat), 1U);
+  EXPECT_EQ(count_one_bid(offset), 1U);
+  EXPECT_EQ(count_one_ask(baseline), 1U);
+  EXPECT_EQ(count_one_ask(flat), 1U);
+  EXPECT_EQ(count_one_ask(offset), 1U);
+}

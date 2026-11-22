@@ -30,7 +30,7 @@ enum class CsvKind { Book, Trades };
 enum class ReadStatus { Row, End, Error };
 
 struct CsvRecord {
-  std::uint64_t timestamp_us{};
+  std::uint64_t event_timestamp_us{};
   std::uint64_t local_timestamp_us{};
   Event event{};
 };
@@ -116,14 +116,16 @@ bool parse_timestamp(std::string_view text, std::uint64_t& timestamp_us) {
 class TardisCsvReader {
 public:
   TardisCsvReader(const std::filesystem::path& path, CsvKind kind, std::string_view symbol,
-                  std::int32_t price_scale, std::int32_t qty_scale)
+                  std::int32_t price_scale, std::int32_t qty_scale, std::uint64_t max_backstep_ms)
       : input_(path), kind_(kind), symbol_(symbol), price_scale_(price_scale),
-        qty_scale_(qty_scale) {}
+        qty_scale_(qty_scale), max_backstep_ms_(max_backstep_ms) {}
 
   [[nodiscard]] bool is_open() const noexcept { return input_.is_open(); }
   [[nodiscard]] const std::string& error() const noexcept {
     return error_.empty() ? input_.error() : error_;
   }
+  [[nodiscard]] std::uint64_t backstep_count() const noexcept { return backstep_count_; }
+  [[nodiscard]] std::uint64_t largest_backstep_us() const noexcept { return largest_backstep_us_; }
 
   ReadStatus next(CsvRecord& record) {
     std::string line;
@@ -166,19 +168,28 @@ public:
       }
 
       CsvRecord parsed{};
-      if (!parse_timestamp(fields[2], parsed.timestamp_us) ||
+      std::uint64_t timestamp_us = 0;
+      if (!parse_timestamp(fields[2], timestamp_us) ||
           !parse_unsigned(fields[3], parsed.local_timestamp_us)) {
         error_ = row_error("invalid timestamp");
         return ReadStatus::Error;
       }
-      if (have_previous_timestamp_ && parsed.timestamp_us < previous_timestamp_us_) {
-        error_ = row_error("timestamp moved backwards; input rows must be capture ordered");
-        return ReadStatus::Error;
+      if (!have_previous_timestamp_ || timestamp_us >= previous_max_timestamp_us_) {
+        previous_max_timestamp_us_ = timestamp_us;
+      } else {
+        const std::uint64_t backstep_us = previous_max_timestamp_us_ - timestamp_us;
+        ++backstep_count_;
+        largest_backstep_us_ = std::max(largest_backstep_us_, backstep_us);
+        if (backstep_us > max_backstep_ms_ * 1000U) {
+          error_ = row_error("timestamp backstep of " + std::to_string(backstep_us) +
+                             " us exceeds --max-backstep-ms " + std::to_string(max_backstep_ms_));
+          return ReadStatus::Error;
+        }
       }
-      previous_timestamp_us_ = parsed.timestamp_us;
       have_previous_timestamp_ = true;
 
-      parsed.event.ts_ns = static_cast<std::int64_t>(parsed.timestamp_us * 1000U);
+      parsed.event_timestamp_us = previous_max_timestamp_us_;
+      parsed.event.ts_ns = static_cast<std::int64_t>(parsed.event_timestamp_us * 1000U);
       parsed.event.first_id = 0;
       parsed.event.last_id = 0;
       if (!parse_fixed(fields[6], price_scale_, parsed.event.price) ||
@@ -241,9 +252,12 @@ private:
   std::string symbol_;
   std::int32_t price_scale_;
   std::int32_t qty_scale_;
+  std::uint64_t max_backstep_ms_;
   std::string error_;
   std::uint64_t line_number_{};
-  std::uint64_t previous_timestamp_us_{};
+  std::uint64_t previous_max_timestamp_us_{};
+  std::uint64_t backstep_count_{};
+  std::uint64_t largest_backstep_us_{};
   bool header_seen_{};
   bool have_previous_timestamp_{};
   bool seen_snapshot_{};
@@ -281,7 +295,7 @@ bool write_event(std::ofstream& output, const Event& event) {
 }
 
 CsvToBinaryResult failure(std::string message) {
-  return CsvToBinaryResult{false, 0, std::move(message)};
+  return CsvToBinaryResult{false, 0, 0, 0, std::move(message)};
 }
 
 } // namespace
@@ -297,15 +311,18 @@ CsvToBinaryResult convert_tardis_csv_to_binary(const CsvToBinaryConfig& config) 
       config.qty_scale > 18) {
     return failure("price and quantity scales must be in [0, 18]");
   }
+  if (config.max_backstep_ms > std::numeric_limits<std::uint64_t>::max() / 1000U) {
+    return failure("maximum timestamp backstep is too large");
+  }
 
   TardisCsvReader book(config.book_csv_gz, CsvKind::Book, config.symbol, config.price_scale,
-                       config.qty_scale);
+                       config.qty_scale, config.max_backstep_ms);
   if (!book.is_open()) return failure(book.error());
 
   std::optional<TardisCsvReader> trades;
   if (config.trades_csv_gz) {
     trades.emplace(*config.trades_csv_gz, CsvKind::Trades, config.symbol, config.price_scale,
-                   config.qty_scale);
+                   config.qty_scale, config.max_backstep_ms);
     if (!trades->is_open()) return failure(trades->error());
   }
 
@@ -357,9 +374,9 @@ CsvToBinaryResult convert_tardis_csv_to_binary(const CsvToBinaryConfig& config) 
   };
 
   while (book_status == ReadStatus::Row || trade_status == ReadStatus::Row) {
-    const bool take_book =
-        book_status == ReadStatus::Row &&
-        (trade_status != ReadStatus::Row || book_record.timestamp_us <= trade_record.timestamp_us);
+    const bool take_book = book_status == ReadStatus::Row &&
+                           (trade_status != ReadStatus::Row ||
+                            book_record.event_timestamp_us <= trade_record.event_timestamp_us);
     const CsvRecord current = take_book ? book_record : trade_record;
     if (have_pending) {
       if (pending_local_timestamp != current.local_timestamp_us) {
@@ -421,7 +438,11 @@ CsvToBinaryResult convert_tardis_csv_to_binary(const CsvToBinaryConfig& config) 
     discard_temporary();
     return failure("cannot publish binary output: " + rename_error.message());
   }
-  return CsvToBinaryResult{true, event_count, {}};
+  const std::uint64_t backstep_count =
+      book.backstep_count() + (trades ? trades->backstep_count() : 0U);
+  const std::uint64_t largest_backstep_us =
+      std::max(book.largest_backstep_us(), trades ? trades->largest_backstep_us() : 0U);
+  return CsvToBinaryResult{true, event_count, backstep_count, largest_backstep_us, {}};
 }
 
 } // namespace tickbook

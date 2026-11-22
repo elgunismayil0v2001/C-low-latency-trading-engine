@@ -43,12 +43,16 @@ public:
 
   template <typename Visitor>
   void visit_bids(Visitor&& visitor) const noexcept(noexcept(visitor(Price{}, Qty{}))) {
-    for (const auto& level : bids_) visitor(level.price, level.qty);
+    for (const auto& level : bids_) {
+      if (!visit_level(visitor, level.price, level.qty)) break;
+    }
   }
 
   template <typename Visitor>
   void visit_asks(Visitor&& visitor) const noexcept(noexcept(visitor(Price{}, Qty{}))) {
-    for (const auto& level : asks_) visitor(level.price, level.qty);
+    for (const auto& level : asks_) {
+      if (!visit_level(visitor, level.price, level.qty)) break;
+    }
   }
 
   [[nodiscard]] bool crossed() const noexcept {
