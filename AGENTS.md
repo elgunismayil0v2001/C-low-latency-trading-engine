@@ -276,11 +276,12 @@ Dockerfile*                  pinned toolchain
   README roadmap in sync with section 7.
 
 ### 3. Faster books (same interface as `BookMap`)
-- 3.1 Flat sorted-vector book: contiguous storage, preallocated capacity, documented depth policy (full depth, or a
+- 3.1 DONE: Flat sorted-vector book: contiguous storage, preallocated capacity, documented depth policy (full depth, or a
   bounded top-N with the approximation stated and tested). Best level must be O(1).
-- 3.2 Offset-array book: array indexed by price offset from a base in ticks, window re-centring policy documented,
+- 3.2 DONE: Offset-array book: array indexed by price offset from a base in ticks, window re-centring policy documented,
   best-level tracking without scanning the whole array on every update.
-- 3.3 Differential test of all three books (section 5) plus a real-file comparison on a replayed day.
+- 3.3 IN PROGRESS: Differential test of all three books (section 5) plus a real-file comparison on a replayed day.
+  Differential tests and the `compare_books` validator are complete; the real-day run awaits an accessible data file.
 
 ### 4. Measurement and proof of speed
 - 4.1 Latency histogram: preallocated log-linear buckets, record per-event processing time, report p50, p99, p99.9, max.
@@ -351,7 +352,7 @@ Dockerfile*                  pinned toolchain
 ### Open decisions (settle from data, record the answer here)
 - Final prediction horizon (primary 3 s; evaluate 1 s and 10 s).
 - Dead-zone `k` for the flat class.
-- Depth policy of the flat book (full vs bounded).
+- Depth policy of the flat book: bounded top-N, default 4096 levels per side; a better level evicts the worst retained level.
 - Whether to add int8 or SIMD inference.
 - Per-event latency budget (ns), set in 4.4.
 - Networking library for milestone 8.

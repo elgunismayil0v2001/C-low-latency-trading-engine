@@ -5,12 +5,12 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestone 1, milestones 2.1–2.6, and the milestone 2.8 generator and documentation are
-complete. Milestone 2.7 tooling is implemented: parser fuzz targets, CI gates, a local gate
-script, and a pinned Ubuntu toolchain. Current AppleClang plain, ASan/UBSan, and TSan runs
-each pass all 55 tests, including the synthetic generator and allocation fixtures. The
-Ubuntu workflow is configured for the GCC/Clang sanitizer matrix and the Linux-only fuzz
-and static-analysis gates; those hosted jobs have not yet run from this workspace.
+Milestones 1, 2.1–2.6, 2.8, and 3.1–3.2 are complete. Milestone 3.3's differential test
+and comparison tool are implemented; replaying an actual Tardis day remains pending data
+availability. Milestone 2.7 tooling is implemented: parser fuzz targets, CI gates, a local
+gate script, and a pinned Ubuntu toolchain. Current AppleClang plain, ASan/UBSan, and TSan
+runs each pass all 67 tests. The Ubuntu workflow's Linux-only fuzz and static-analysis gates
+have not yet run from this workspace.
 
 ## Build and test
 
@@ -68,6 +68,48 @@ event. The replay uses a lossless producer-to-consumer SPSC ring; it yields whil
 for space or data outside latency measurement runs. Linux pins producer and consumer to
 distinct physical cores; macOS does not support this pinning path.
 
+## Order book layouts
+
+`BookMap` is the full-depth reference. `FlatBook` stores the best 4,096 levels per side by
+default. At capacity it drops the worst retained level when a better one arrives and ignores
+updates below its retained range. It reserves its vectors at construction. `OffsetArrayBook`
+uses a fixed window of 65,536 price ticks by default; pass the fixed-point tick size as the
+second constructor argument when it is greater than one. Its circular storage slides the
+window to include out-of-range updates and drops levels that leave the window. Both optimized
+books avoid allocations during updates.
+
+`compare_books` pre-scans a binary file to size both bounded books for the observed price
+range, then compares best levels, counts, crossed state, and top five levels after every event.
+The binary header does not contain the exchange tick size, so pass it as an integer number of
+fixed-point price units when it is greater than one (the default is one):
+
+    build/compare_books /path/to/day.bin --price-tick 1
+
+The validator rejects files whose price span exceeds four million ticks. The current
+workspace has only synthetic files; `compare_books` is ready for a local Tardis day binary.
+
+### Preliminary book-apply microbenchmark
+
+This measures an in-memory event loop, not end-to-end replay latency. Each value is the
+median elapsed batch time divided by 150,010 events across seven runs; the ranges show the
+minimum and maximum run averages. The same seeded synthetic BTCUSDT file (seed 4242,
+50,000 messages) was used for each layout. Hardware: Apple M2 MacBook Air, macOS 27.2.1.
+Compiler: Apple LLVM 21.0.0, `-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow -Werror`.
+No minor faults were observed in the measured loops. These are batch averages, not per-event
+tail percentiles; milestone 4 adds the latency histogram. Runs were back-to-back without a
+cool-down, so treat the ranges as exploratory on the fanless M2 Air.
+
+| Layout | Median ns/event | Run range ns/event |
+| --- | ---: | ---: |
+| `BookMap` | 8.65 | 7.86–9.82 |
+| `FlatBook` | 9.85 | 9.46–10.81 |
+| `OffsetArrayBook` (circular recentering) | 3.39 | 3.24–3.42 |
+| `OffsetArrayBook` before circular recentering | 23.62 | 21.59–31.56 |
+
+The circular recentering change reduced the offset book's median on this fixture by about
+86%. `FlatBook` was slower than `BookMap` on this shallow synthetic stream, so these numbers
+do not establish a general speedup for the flat layout.
+
 ## Design rules
 
 - Prices and quantities are `int64` fixed-point. No `double` on the hot path.
@@ -81,7 +123,7 @@ distinct physical cores; macOS does not support this pinning path.
 
 ## Roadmap
 
-1. Milestone 3: flat sorted-vector and offset-array books, same interface as `BookMap`.
+1. Milestone 3 in progress: 3.1–3.2 are complete; run `compare_books` on a real Tardis day to complete 3.3.
 2. Milestone 4: latency histogram, allocation measurements, flame graph and benchmark table.
 3. Milestone 5: features, signal evaluation and out-of-sample baselines.
 4. Milestone 6: offline labels, training and C++ inference, only if the signal evaluation warrants it.

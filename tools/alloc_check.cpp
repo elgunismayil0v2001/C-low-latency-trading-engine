@@ -17,6 +17,8 @@
 #include "tickbook/binary_file.hpp"
 #include "tickbook/binary_replay.hpp"
 #include "tickbook/book_map.hpp"
+#include "tickbook/books/flat_book.hpp"
+#include "tickbook/books/offset_book.hpp"
 #include "tickbook/ring_buffer.hpp"
 #include "tickbook/types.hpp"
 
@@ -217,6 +219,30 @@ int main(int argc, char** argv) {
   }
   const auto book_map_allocations = allocation_count.load(std::memory_order_relaxed);
 
+  tickbook::FlatBook flat_book(8);
+  tickbook::OffsetArrayBook offset_book(256);
+  std::size_t flat_book_allocations = 0;
+  std::size_t offset_book_allocations = 0;
+  allocation_count.store(0, std::memory_order_relaxed);
+  {
+    CountAllocations measured_flat_book;
+    for (const auto& update : events) {
+      if ((update.flags & tickbook::kEventFlagSnapshotStart) != 0) flat_book.clear();
+      flat_book.apply(update);
+    }
+  }
+  flat_book_allocations = allocation_count.load(std::memory_order_relaxed);
+
+  allocation_count.store(0, std::memory_order_relaxed);
+  {
+    CountAllocations measured_offset_book;
+    for (const auto& update : events) {
+      if ((update.flags & tickbook::kEventFlagSnapshotStart) != 0) offset_book.clear();
+      offset_book.apply(update);
+    }
+  }
+  offset_book_allocations = allocation_count.load(std::memory_order_relaxed);
+
   const auto best_bid = book.best_bid();
   const auto best_ask = book.best_ask();
   const bool replay_matches_fixture =
@@ -224,12 +250,17 @@ int main(int argc, char** argv) {
       produced.load(std::memory_order_relaxed) == events.size() && consumed == events.size() &&
       book.bid_levels() == 1 && book.ask_levels() == 1 && best_bid && best_ask &&
       best_bid->price == 10'000 && best_bid->qty == static_cast<tickbook::Qty>(events.size() - 1) &&
-      best_ask->price == 10'100 && best_ask->qty == static_cast<tickbook::Qty>(events.size());
+      best_ask->price == 10'100 && best_ask->qty == static_cast<tickbook::Qty>(events.size()) &&
+      flat_book.best_bid() == best_bid && flat_book.best_ask() == best_ask &&
+      offset_book.best_bid() == best_bid && offset_book.best_ask() == best_ask;
 
   std::cout << "fixture_events=" << events.size()
             << " transport_allocations=" << transport_allocations
-            << " book_map_positive_control_allocations=" << book_map_allocations << '\n';
-  if (!replay_matches_fixture || transport_allocations != 0 || book_map_allocations == 0) {
+            << " book_map_positive_control_allocations=" << book_map_allocations
+            << " flat_book_allocations=" << flat_book_allocations
+            << " offset_book_allocations=" << offset_book_allocations << '\n';
+  if (!replay_matches_fixture || transport_allocations != 0 || book_map_allocations == 0 ||
+      flat_book_allocations != 0 || offset_book_allocations != 0) {
     std::cerr << "allocation check failed\n";
     return 1;
   }

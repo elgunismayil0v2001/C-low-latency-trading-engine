@@ -4,14 +4,9 @@
 #include <map>
 #include <optional>
 
-#include "tickbook/types.hpp"
+#include "tickbook/books/order_book.hpp"
 
 namespace tickbook {
-
-struct Level {
-  Price price;
-  Qty qty;
-};
 
 // Baseline L2 (price-level) order book on std::map. Correct and simple; slow because
 // of node allocations. Later layouts (flat vector, offset array) must expose the same

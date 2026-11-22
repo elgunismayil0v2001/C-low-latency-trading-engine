@@ -41,6 +41,9 @@ target_link_libraries(csv_to_bin PRIVATE tickbook_csv_converter tickbook_flags)
 add_executable(gen_synthetic tools/gen_synthetic_main.cpp)
 target_link_libraries(gen_synthetic PRIVATE tickbook_synthetic_generator tickbook_flags)
 
+add_executable(compare_books tools/compare_books.cpp)
+target_link_libraries(compare_books PRIVATE tickbook tickbook_flags)
+
 add_executable(replay tools/replay_main.cpp)
 target_link_libraries(replay PRIVATE tickbook tickbook_flags Threads::Threads)
 
@@ -64,6 +67,9 @@ if(BUILD_TESTING)
     tests/test_fixed.cpp
     tests/test_ring_buffer.cpp
     tests/test_book_map.cpp
+    tests/test_flat_book.cpp
+    tests/test_offset_book.cpp
+    tests/test_books_differential.cpp
     tests/test_sequencer.cpp
     tests/test_csv_to_bin.cpp
     tests/test_csv_line.cpp
