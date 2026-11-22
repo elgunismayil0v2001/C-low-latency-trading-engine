@@ -5,8 +5,9 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestones 1, 2.1–2.6, 2.8, 3.1–3.3, and 4.2 are complete. Milestone 4.1 adds a Release-only
-per-event replay histogram; its Linux zero-minor-fault assertion still needs a Linux run.
+Milestones 1, 2.1–2.6, 2.8, 3.1–3.3, 4.2, and 4.4 are complete. Milestone 4.1 adds a Release-only
+per-event replay histogram; its Linux zero-minor-fault assertion still needs a Linux run. The
+milestone 4.3 five-run comparison is recorded below; its Linux `perf` flame graph remains pending.
 `compare_books` matched `BookMap`,
 `FlatBook`, and `OffsetArrayBook` after every event in the 2019-12-01 Binance BTCUSDT replay
 (6,907,104 events). Milestone 2.7 tooling is implemented: parser fuzz targets, CI gates, a
@@ -92,9 +93,54 @@ nonzero. macOS cannot pin threads; it reports process-wide minor faults without 
 One measured `BookMap` pass over BTCUSDT 2019-12-01 on the Apple M2 MacBook Air (macOS 27.2.1),
 Apple LLVM 21.0.0, `-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow -Werror`, covered 6,907,104
 events after one full warm-up pass. It reported p50 26 ns, p99 109 ns, p99.9 151 ns, max
-61,734 ns, a 16 ns timer-overhead estimate, and 3 process-wide minor faults. This is one
-exploratory run, not the five-run benchmark table required by milestone 4.3 and not trading
-latency.
+61,734 ns, a 16 ns timer-overhead estimate, and 3 process-wide minor faults. This is the initial
+single BookMap run; the five-run layout comparison appears below. These are replay processing
+numbers, not trading latency.
+
+### Five-run replay comparison (milestone 4.3)
+
+Each cell shows the median of five per-run measurements and the min–max run range. All runs used
+the same Binance BTCUSDT 2019-12-01 binary (6,907,104 events), one full warm-up before measurement,
+and 30 seconds between runs. Layouts ran interleaved. Hardware: Apple M2 MacBook Air, 8 GB, macOS
+27.2.1; compiler: Apple LLVM 21.0.0; flags: `-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow
+-Werror`. These are replay ring-pop-to-book-apply latencies after subtracting the measured timer
+overhead, in nanoseconds. They are not trading latency.
+
+| Book layout | p50 ns | p99 ns | p99.9 ns | Max ns |
+| --- | ---: | ---: | ---: | ---: |
+| `BookMap` | 28 (27–61) | 111 (111–231) | 155 (155–991) | 54,527 (11,069–3,124,728) |
+| `FlatBook` | 1,055 (1,055–1,087) | 2,111 (2,111–3,007) | 2,495 (2,175–16,383) | 5,262,236 (82,901–73,262,861) |
+| `OffsetArrayBook` | 28 (26–28) | 28 (28–109) | 111 (111–195) | 789,570 (753,527–1,832,942) |
+
+All five OffsetArrayBook runs had zero measured hot-path allocations. All five FlatBook runs had
+zero; BookMap allocated 2,671,052 times per run. macOS reports process-scoped minor faults rather
+than asserting zero: run counts ranged 1–10 for BookMap, 1–24 for FlatBook, and 0–2 for
+OffsetArrayBook. The fanless M2 showed substantial max-latency and fault-count spread, so the
+percentile ranges are shown and the exact maxima are not used to set the budget. The Linux x86
+comparison and flame graph remain needed for the authoritative pinned-core profile.
+
+To capture that profile on Linux with `perf` and Brendan Gregg's FlameGraph scripts available on
+`PATH`, build the benchmark with debug symbols and run the best measured layout:
+
+    cmake -S . -B build-profile -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DTICKBOOK_BUILD_BENCHMARKS=ON -DBUILD_TESTING=OFF
+    cmake --build build-profile --target replay_latency -j
+    scripts/profile-replay-linux.sh /path/to/BTCUSDT.bin docs/replay-offset.svg 1
+
+The script records the OffsetArrayBook replay with `perf record`, folds stacks, and writes the SVG.
+The profile is diagnostic; use unprofiled runs for the benchmark table. The current Apple Silicon
+workspace has no Linux `perf`, Docker, or Instruments command-line tools, so no flame graph is
+claimed here.
+
+## Per-event latency budget (milestone 4.4)
+
+The target is **p99 <= 500 ns/event** for ring pop, book update, feature update, and signal
+evaluation; NN inference shares this total. The budget is based on the OffsetArrayBook baseline
+measured on the Apple M2 MacBook Air, macOS 27.2.1: median p99 28 ns and median p99.9 111 ns over
+five runs. The 500 ns target is about 4.5 times that measured p99.9, leaving room for later stages.
+The baseline currently measures only ring pop through book apply, so each later stage must be
+added to the same end-to-end measurement before it can be considered within budget. Recheck the
+target against the pinned Linux x86 results when those are available.
 
 ## Allocation counter (milestone 4.2)
 
@@ -166,8 +212,8 @@ do not establish a general speedup for the flat layout.
 
 ## Roadmap
 
-1. Milestones 3.1–3.3 and 4.2 complete; milestone 4.1 implemented, with a Linux zero-fault run pending.
-2. Milestones 4.3–4.4: benchmark table/flame graph and latency budget.
+1. Milestones 3.1–3.3, 4.2, and 4.4 complete; milestone 4.1 implemented, with a Linux zero-fault run pending.
+2. Milestone 4.3: five-run Mac comparison complete; Linux x86 comparison and `perf` flame graph pending.
 3. Milestone 5: features, signal evaluation and out-of-sample baselines.
 4. Milestone 6: offline labels, training and C++ inference, only if the signal evaluation warrants it.
 5. Milestone 7: strategy interfaces, simulated exchange and metrics.

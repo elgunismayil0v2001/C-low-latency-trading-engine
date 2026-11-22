@@ -293,14 +293,17 @@ Dockerfile*                  pinned toolchain
 - 4.2 DONE: `replay_latency` replaces global allocation operators and counts allocations after startup through the
   full producer/ring/consumer replay. Flat and offset book runs fail on nonzero allocations; `BookMap` is required to
   allocate as a positive control. The CI allocation job runs all three book variants on a deterministic fixture.
-- 4.3 Benchmark table in README: `BookMap` vs flat vs offset, same data, hardware and compiler stated, median of at
-  least 5 runs. Add a `perf` flame graph for the best layout (Linux; document how to reproduce).
+- 4.3 IN PROGRESS: README records five interleaved runs per layout on the same 2019-12-01 BTCUSDT file, with
+  hardware, compiler, flags, medians and run ranges. `scripts/profile-replay-linux.sh` documents and automates the
+  OffsetArrayBook `perf` flame graph. The Linux x86 comparison and flame graph remain unmeasured from this macOS
+  workspace.
   Environment caveats to state in the README: the owner's Apple M2 Air is fanless and throttles under sustained load
   (cool down between runs, report run-to-run spread), and macOS has no `perf` or core pinning (use Instruments or
   `samply` there). Authoritative pinned-core numbers and flame graphs come from Linux x86 (the pinned Docker image
   or a Linux machine); report macOS and Linux results in separate rows, never mixed.
-- 4.4 Set the **per-event latency budget (ns)** from this baseline and record it in "Open decisions". Every later
-  stage, including NN inference, must fit it.
+- 4.4 DONE: set the end-to-end hot-path budget to p99 <= 500 ns/event from the five-run OffsetArrayBook baseline
+  (median p99 28 ns, median p99.9 111 ns on Apple M2/macOS 27.2.1). Feature, signal, and inference work share this
+  budget and must be measured with the ring-pop-to-book path.
 
 ### 5. Signal first: features and evaluation
 - 5.1 `FeatureEngine`: incremental O(1) per message, fixed-size output struct, no allocation. Features (K = 5 levels default):
@@ -357,7 +360,8 @@ Dockerfile*                  pinned toolchain
 - Dead-zone `k` for the flat class.
 - Depth policy of the flat book: bounded top-N, default 4096 levels per side; a better level evicts the worst retained level.
 - Whether to add int8 or SIMD inference.
-- Per-event latency budget (ns), set in 4.4.
+- Per-event latency budget: 500 ns/event at p99 for ring pop through book update, feature update, and signal; NN
+  inference shares the same budget.
 - Networking library for milestone 8.
 
 ## 8. Writing about results
