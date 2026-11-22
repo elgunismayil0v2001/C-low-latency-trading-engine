@@ -33,6 +33,8 @@ if(BUILD_TESTING)
   find_package(Threads REQUIRED)
 
   add_executable(tickbook_tests
+    tests/test_types.cpp
+    tests/test_binary_file.cpp
     tests/test_fixed.cpp
     tests/test_ring_buffer.cpp
     tests/test_book_map.cpp

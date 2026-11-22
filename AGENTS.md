@@ -259,7 +259,7 @@ Dockerfile*                  pinned toolchain
 ### 2. Correctness base and replay
 - 2.1 DONE: Sequencer fix: it must see one call per message (or use the end-of-message flag); add tests for a multi-level
   message, an empty message, and a duplicate message. Add a reinit after `Resync`.
-- 2.2 `Event` explicit padding, `flags` field, binary file header and validating reader (section 4).
+- 2.2 DONE: `Event` explicit padding, `flags` field, binary file header and validating reader (section 4).
 - 2.3 The five CI and test gaps listed in section 1.
 - 2.4 `csv_to_bin`: stream-parse the gzipped Tardis CSVs (book and trades), apply the rules in section 4, write the
   binary file. Parsing may allocate (offline tool); it must use `parse_fixed`, never `stod`/`strtod`.

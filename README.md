@@ -5,9 +5,9 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 
 ## Status
 
-Milestone 1 is complete. Milestone 2.1 is complete: the diff-depth sequencer processes
-each Binance message once, accepts overlapping update ranges, drops duplicates, detects
-gaps in empty messages, and can reset after a resync. 28 tests pass.
+Milestone 1 is complete. Milestones 2.1 and 2.2 are complete: the diff-depth sequencer
+handles full messages and resyncs, and `Event` has explicit zeroed padding plus a message
+boundary flag. The 64-byte binary header has a validating zero-copy view. 36 tests pass.
 
 ## Build and test
 
