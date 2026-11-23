@@ -34,6 +34,55 @@ void write_u32(std::vector<std::byte>& bytes, std::size_t offset, std::uint32_t 
   }
 }
 
+void append_u32(std::vector<std::byte>& bytes, std::uint32_t value) {
+  for (std::size_t index = 0; index < sizeof(value); ++index) {
+    bytes.push_back(static_cast<std::byte>((value >> (index * 8U)) & 0xffU));
+  }
+}
+
+void append_float(std::vector<std::byte>& bytes, float value) {
+  append_u32(bytes, std::bit_cast<std::uint32_t>(value));
+}
+
+std::vector<std::byte> variable_width_weights(std::uint32_t hidden_width) {
+  std::vector<std::byte> bytes;
+  for (const char value : tickbook::nn::kWeightsMagic) {
+    bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(value)));
+  }
+  append_u32(bytes, tickbook::nn::kWeightsVersion);
+  append_u32(bytes, tickbook::nn::kWeightsEndianness);
+  append_u32(bytes, tickbook::nn::kMlpLayerCount);
+  const std::array<std::array<std::uint32_t, 3>, 3> descriptors{{
+      {static_cast<std::uint32_t>(tickbook::nn::kMlpFeatureCount), hidden_width,
+       static_cast<std::uint32_t>(tickbook::nn::Activation::Relu)},
+      {hidden_width, hidden_width, static_cast<std::uint32_t>(tickbook::nn::Activation::Relu)},
+      {hidden_width, 3, static_cast<std::uint32_t>(tickbook::nn::Activation::Linear)},
+  }};
+  for (const auto& descriptor : descriptors) {
+    for (const auto value : descriptor) append_u32(bytes, value);
+  }
+  for (std::size_t index = 0; index < tickbook::nn::kMlpFeatureCount; ++index) {
+    append_float(bytes, 0.0F);
+  }
+  for (std::size_t index = 0; index < tickbook::nn::kMlpFeatureCount; ++index) {
+    append_float(bytes, 1.0F);
+  }
+  for (std::size_t layer = 0; layer < descriptors.size(); ++layer) {
+    const auto input_width = descriptors[layer][0];
+    const auto output_width = descriptors[layer][1];
+    for (std::size_t index = 0; index < input_width * output_width; ++index) {
+      const auto centered = static_cast<int>(index % 7U) - 3;
+      append_float(bytes, static_cast<float>(centered) * 0.001F);
+    }
+    for (std::size_t index = 0; index < output_width; ++index) {
+      append_float(bytes, static_cast<float>(index + layer) * 0.01F);
+    }
+  }
+  const auto crc = tickbook::nn::weights_detail::crc32(bytes);
+  append_u32(bytes, crc);
+  return bytes;
+}
+
 void refresh_crc(std::vector<std::byte>& bytes) {
   const auto crc = tickbook::nn::weights_detail::crc32(
       std::span<const std::byte>(bytes).first(bytes.size() - sizeof(std::uint32_t)));
@@ -94,6 +143,31 @@ TEST(WeightsLoader, LoadsValidatedTinyMlpAndInfersWithoutDynamicStorage) {
       EXPECT_NEAR(vectorized.values[index], scalar.values[index], 1e-5F);
     }
   }
+}
+
+TEST(WeightsLoader, ReadsHiddenWidthFromWeightsUpToThirtyTwo) {
+  const auto bytes = variable_width_weights(32);
+  tickbook::nn::MlpModel model{};
+  ASSERT_EQ(tickbook::nn::load_weights(bytes, model), tickbook::nn::WeightsLoadError::None);
+  EXPECT_EQ(model.layers[0].output_width, 32U);
+  EXPECT_EQ(model.layers[1].input_width, 32U);
+  EXPECT_EQ(model.layers[1].output_width, 32U);
+  EXPECT_EQ(model.layers[2].input_width, 32U);
+
+  tickbook::FeatureVector input{};
+  input.spread_ticks = 2;
+  input.imbalance_l1_q20 = -120'000;
+  input.imbalance_k_q20 = 230'000;
+  input.ofi_200 = 34'567;
+  const auto vectorized = model.infer(input);
+  const auto scalar = model.infer_scalar(input);
+  ASSERT_EQ(vectorized.count, 3U);
+  for (std::size_t index = 0; index < scalar.count; ++index) {
+    EXPECT_NEAR(vectorized.values[index], scalar.values[index], 1e-5F);
+  }
+
+  const auto too_wide = variable_width_weights(33);
+  EXPECT_EQ(load(too_wide), tickbook::nn::WeightsLoadError::InvalidDimensions);
 }
 
 TEST(WeightsLoader, RejectsHeaderDimensionActivationAndChecksumErrors) {

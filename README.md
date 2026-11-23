@@ -249,11 +249,11 @@ not included. For this sample, 1,480 ticks at a $0.01 tick and a $7,400 referenc
 20.00 bps. The absolute tick threshold is shared across monthly files, so the actual bps varies
 with each month's market price.
 
-The inference model has 11 inputs, two 16-unit ReLU layers, and either one return output or three
-direction logits. Sixteen units were selected after measurement to keep the combined replay median
-p99 inside the 500 ns budget on this M2 sample; the tradeoff against the requested roughly 32-unit
-model remains open pending predictive evaluation on multiple days. C++ provides a scalar reference
-and automatically uses the SIMD implementation on NEON or SSE2 targets. Conversion from the
+The inference model has 11 inputs, two equally sized ReLU layers, and either one return output or
+three direction logits. The weights file carries the hidden width; C++ accepts widths up to 32.
+Training defaults to width 16, and `--hidden-width 32` trains the wider variant for direct
+benchmarking. C++ provides a scalar reference and automatically uses the SIMD implementation on
+NEON or SSE2 targets. Conversion from the
 fixed-point feature struct to normalized `float32` inputs happens in one function. Inference uses
 fixed-size storage and performs no allocation after loading weights.
 
@@ -298,7 +298,10 @@ The combined replay benchmark processed Binance BTCUSDT 2019-12-01 (6,907,104 ev
 1,236,542 message-boundary feature updates) with one warm-up and five measured runs. Hardware:
 Apple M2 MacBook Air, 8 GB, macOS 27.2.1; compiler: Apple LLVM 21.0.0; Release flags:
 `-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow`. Timer overhead is the median of 101 batches of
-64 back-to-back `steady_clock` pairs and is subtracted per observation. The M2 Air is fanless and
+64 back-to-back `steady_clock` pairs and is subtracted per observation. The estimated minimum
+positive `steady_clock` step was 41 ns; median read overhead was 20 ns for the width comparison.
+Standalone inference excludes the SPSC ring hop. The combined replay measurement includes the
+producer push, consumer pop, and measured book, feature, and inference work. The M2 Air is fanless and
 cannot pin replay threads; run-to-run ranges and exact maxima reflect that environment. These are
 replay processing latencies, not trading latency.
 
@@ -307,6 +310,21 @@ replay processing latencies, not trading latency.
 | Scalar MLP, 11-16-16-3 | 151 (125–151) | 279 (191–487) | 463 (231–575) |
 | SIMD MLP, 11-16-16-3 | 48 (25–57) | 97 (67–135) | 143 (135–175) |
 | Offset book + features + SIMD inference | 27 (26–27) | 487 (487–527) | 735 (623–863) |
+
+To compare hidden widths directly, I trained a return model at width 32 and ran five standalone
+million-call measurements for each width on those trained return weights. Values are medians with
+min–max run ranges; timer overhead was subtracted. Both widths had zero inference allocations and
+minor faults:
+
+| SIMD return MLP | p50 ns | p99 ns | p99.9 ns |
+| --- | ---: | ---: | ---: |
+| 11-16-16-1 | 63 (61–67) | 105 (65–151) | 147 (105–195) |
+| 11-32-32-1 | 147 (147–151) | 231 (195–231) | 279 (235–319) |
+
+One combined replay run per width on the same day also included the SPSC ring hop, book update,
+features and inference. Width 16 measured p50/p99/p99.9 of 27/407/487 ns; width 32 measured
+28/543/623 ns. The 32-unit run exceeded the 500 ns p99 budget. These are single-run checks, not
+the five-run table above.
 
 The SIMD inference median p99 was 65% lower than the scalar result for the same width and fixture.
 All five combined replay runs recorded zero hot-path allocations; process minor faults were 0–1

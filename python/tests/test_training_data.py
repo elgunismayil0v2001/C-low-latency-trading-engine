@@ -107,6 +107,12 @@ def test_training_rejects_one_tick_dead_zone_far_below_break_even(tmp_path):
         )
 
 
+def test_training_rejects_hidden_width_above_weights_format_limit(tmp_path):
+    config = Path(__file__).resolve().parents[1] / "config.json"
+    with pytest.raises(ValueError, match="between 1 and 32"):
+        train([], "return", str(tmp_path / "out"), str(config), hidden_width=33)
+
+
 def test_walk_forward_purges_against_midnight_even_if_first_test_row_is_later():
     timestamps = np.array(
         [100, DAY_NS + 100, 2 * DAY_NS - 5_000_000_000, 2 * DAY_NS + 20_000_000_000],

@@ -7,6 +7,8 @@ import subprocess
 import numpy as np
 import pytest
 
+from export_weights import encode_weights
+
 
 def read_weights(path):
     data = path.read_bytes()
@@ -32,7 +34,8 @@ def read_weights(path):
     return mean, standard_deviation, layers
 
 
-def test_cpp_mlp_matches_pytorch_on_1000_fixed_vectors(tmp_path):
+@pytest.mark.parametrize("hidden_width", [16, 32])
+def test_cpp_mlp_matches_pytorch_on_1000_fixed_vectors(tmp_path, hidden_width):
     torch = pytest.importorskip("torch")
     from torch import nn
 
@@ -43,7 +46,34 @@ def test_cpp_mlp_matches_pytorch_on_1000_fixed_vectors(tmp_path):
         pytest.skip("build nn_parity and set TICKBOOK_NN_PARITY_BIN to run C++ parity")
 
     root = Path(__file__).resolve().parents[2]
-    weights_path = root / "tests" / "data" / "tiny_weights.bin"
+    if hidden_width == 16:
+        weights_path = root / "tests" / "data" / "tiny_weights.bin"
+    else:
+        rng_weights = np.random.default_rng(20261123)
+        layers = [
+            (
+                rng_weights.normal(0.0, 0.01, size=(hidden_width, 11)).astype(np.float32),
+                rng_weights.normal(0.0, 0.01, size=hidden_width).astype(np.float32),
+                1,
+            ),
+            (
+                rng_weights.normal(0.0, 0.01, size=(hidden_width, hidden_width)).astype(np.float32),
+                rng_weights.normal(0.0, 0.01, size=hidden_width).astype(np.float32),
+                1,
+            ),
+            (
+                rng_weights.normal(0.0, 0.01, size=(3, hidden_width)).astype(np.float32),
+                rng_weights.normal(0.0, 0.01, size=3).astype(np.float32),
+                0,
+            ),
+        ]
+        weights_path = tmp_path / "tiny_weights_32.bin"
+        feature_scales = np.asarray(
+            [1_000, 700_000, 700_000, 900_000, 100_000_000, 100_000_000,
+             100_000_000, 100_000_000, 100_000_000, 950_000, 950_000],
+            dtype=np.float32,
+        )
+        weights_path.write_bytes(encode_weights(np.zeros(11), feature_scales, layers))
     mean, standard_deviation, layers = read_weights(weights_path)
     rng = np.random.default_rng(20260403)
     raw = rng.integers(-1000, 1001, size=(1000, 11), dtype=np.int64)

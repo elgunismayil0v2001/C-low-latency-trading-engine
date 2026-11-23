@@ -17,6 +17,7 @@ VERSION = 1
 ENDIANNESS = 0x01020304
 FEATURE_COUNT = 11
 HIDDEN_WIDTH = 16
+MAXIMUM_HIDDEN_WIDTH = 32
 ACTIVATION_LINEAR = 0
 ACTIVATION_RELU = 1
 
@@ -38,6 +39,7 @@ def encode_weights(
         raise ValueError("weights must have exactly three affine layers")
 
     expected_input = FEATURE_COUNT
+    hidden_width = 0
     descriptors: list[tuple[int, int, int]] = []
     encoded_layers: list[tuple[np.ndarray, np.ndarray]] = []
     for layer_index, (weights_value, biases_value, activation) in enumerate(layers):
@@ -48,9 +50,12 @@ def encode_weights(
         output_width, input_width = weights.shape
         if biases.shape != (output_width,):
             raise ValueError(f"layer {layer_index} bias dimensions are invalid")
-        expected_output = HIDDEN_WIDTH if layer_index < 2 else output_width
-        if layer_index < 2 and output_width != expected_output:
-            raise ValueError(f"the two hidden layers must have width {HIDDEN_WIDTH}")
+        if layer_index == 0:
+            hidden_width = output_width
+            if not 1 <= hidden_width <= MAXIMUM_HIDDEN_WIDTH:
+                raise ValueError(f"hidden width must be between 1 and {MAXIMUM_HIDDEN_WIDTH}")
+        if layer_index < 2 and output_width != hidden_width:
+            raise ValueError(f"the two hidden layers must have width {hidden_width}")
         if layer_index == 2 and output_width not in (1, 3):
             raise ValueError("the output layer must have width 1 or 3")
         expected_activation = ACTIVATION_RELU if layer_index < 2 else ACTIVATION_LINEAR

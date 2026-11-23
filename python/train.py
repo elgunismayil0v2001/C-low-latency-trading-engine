@@ -13,6 +13,7 @@ import sys
 import numpy as np
 
 HIDDEN_WIDTH = 16
+MAXIMUM_HIDDEN_WIDTH = 32
 _BLOCK_NS = 3_600_000_000_000
 _BOOTSTRAP_REPLICATES = 2_000
 
@@ -35,13 +36,13 @@ def _load_torch():
     return torch, nn
 
 
-def _make_network(nn, output_count: int):
+def _make_network(nn, output_count: int, hidden_width: int):
     class MLP(nn.Module):
         def __init__(self) -> None:
             super().__init__()
-            self.layer0 = nn.Linear(FEATURE_COUNT, HIDDEN_WIDTH)
-            self.layer1 = nn.Linear(HIDDEN_WIDTH, HIDDEN_WIDTH)
-            self.layer2 = nn.Linear(HIDDEN_WIDTH, output_count)
+            self.layer0 = nn.Linear(FEATURE_COUNT, hidden_width)
+            self.layer1 = nn.Linear(hidden_width, hidden_width)
+            self.layer2 = nn.Linear(hidden_width, output_count)
 
         def forward(self, inputs):
             return self.layer2(self.layer1(self.layer0(inputs).relu()).relu())
@@ -186,10 +187,10 @@ def _fit_logistic(torch, nn, x_train, y_train, config, seed: int):
     return model
 
 
-def _fit_mlp(torch, nn, x_train, y_train, task: str, config, seed: int):
+def _fit_mlp(torch, nn, x_train, y_train, task: str, config, seed: int, hidden_width: int):
     torch.manual_seed(seed)
     output_count = 3 if task == "direction" else 1
-    model = _make_network(nn, output_count)
+    model = _make_network(nn, output_count, hidden_width)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=float(config["learning_rate"]),
@@ -320,7 +321,10 @@ def train(
     price_tick: str = "0.01",
     reference_price: str | None = None,
     break_even_move_bps: float = 20.0,
+    hidden_width: int = HIDDEN_WIDTH,
 ) -> dict:
+    if not 1 <= hidden_width <= MAXIMUM_HIDDEN_WIDTH:
+        raise ValueError(f"hidden width must be between 1 and {MAXIMUM_HIDDEN_WIDTH}")
     config = json.loads(Path(config_path).read_text(encoding="utf-8"))
     if task == "direction":
         kind = LABEL_DIRECTION
@@ -362,6 +366,7 @@ def train(
         "task": task,
         "symbol": dataset.symbol,
         "horizon_seconds": dataset.horizon_seconds,
+        "hidden_width": hidden_width,
         "label_dead_zone_ticks": dataset.dead_zone_ticks,
         "label_dead_zone_bps_at_reference_price": dead_zone_bps,
         "dead_zone_price_tick": str(price_tick),
@@ -402,6 +407,7 @@ def train(
             task,
             config,
             int(config["seed"]) + fold_index,
+            hidden_width,
         )
         y_test = y_all[fold.test_indices]
         if task == "return":
@@ -481,6 +487,12 @@ def main() -> int:
         default=20.0,
         help="required direction-label dead zone, within 25%% (default: two 10 bps taker fees)",
     )
+    parser.add_argument(
+        "--hidden-width",
+        type=int,
+        default=HIDDEN_WIDTH,
+        help="width of both hidden layers (maximum 32)",
+    )
     args = parser.parse_args()
     try:
         report = train(
@@ -491,6 +503,7 @@ def main() -> int:
             args.price_tick,
             args.reference_price,
             args.break_even_move_bps,
+            args.hidden_width,
         )
     except (OSError, ValueError, RuntimeError) as error:
         print(f"train.py: {error}", file=sys.stderr)

@@ -41,6 +41,20 @@ void note_allocation() noexcept {
       std::chrono::duration_cast<std::chrono::nanoseconds>(time).count());
 }
 
+[[nodiscard]] std::uint64_t timer_resolution_ns() noexcept {
+  auto previous = now_ns();
+  std::uint64_t minimum_positive_delta = std::numeric_limits<std::uint64_t>::max();
+  for (std::size_t sample = 0; sample < 100'000; ++sample) {
+    const auto current = now_ns();
+    if (current > previous) minimum_positive_delta = std::min(minimum_positive_delta,
+                                                               current - previous);
+    previous = current;
+  }
+  return minimum_positive_delta == std::numeric_limits<std::uint64_t>::max()
+             ? 0
+             : minimum_positive_delta;
+}
+
 [[nodiscard]] std::uint64_t timer_overhead() noexcept {
   constexpr std::size_t kBatches = 101;
   constexpr std::size_t kPairsPerBatch = 64;
@@ -155,6 +169,7 @@ int main(int argc, char** argv) try {
     static_cast<void>(use_simd ? model.infer(input) : model.infer_scalar(input));
   }
   const auto overhead_ns = timer_overhead();
+  const auto resolution_ns = timer_resolution_ns();
   tickbook::LatencyHistogram histogram;
   histogram.reset();
   std::uint32_t checksum = 0;
@@ -187,8 +202,10 @@ int main(int argc, char** argv) try {
   const auto p99 = histogram.percentile_upper_ns(9900);
   const auto p999 = histogram.percentile_upper_ns(9990);
   std::cout << "model=" << (use_simd ? "simd_mlp" : "scalar_mlp") << '\n'
+            << "hidden_width=" << model.layers[0].output_width << '\n'
             << "calls=" << histogram.count() << '\n'
-            << "timer=steady_clock timer_overhead_ns=" << overhead_ns << '\n'
+            << "timer=steady_clock timer_resolution_estimate_ns=" << resolution_ns
+            << " timer_overhead_ns=" << overhead_ns << '\n'
             << "p50_ns=" << (p50 ? std::to_string(*p50) : "n/a") << '\n'
             << "p99_ns=" << (p99 ? std::to_string(*p99) : "n/a") << '\n'
             << "p99.9_ns=" << (p999 ? std::to_string(*p999) : "n/a") << '\n'

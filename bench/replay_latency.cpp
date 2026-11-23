@@ -83,6 +83,21 @@ enum class BookKind : std::uint8_t { Map, Flat, Offset };
       std::chrono::duration_cast<std::chrono::nanoseconds>(ticks).count());
 }
 
+[[nodiscard]] std::uint64_t timer_resolution_ns() noexcept {
+  auto previous = timer_now_ns();
+  std::uint64_t minimum_positive_delta = std::numeric_limits<std::uint64_t>::max();
+  for (std::size_t sample = 0; sample < 100'000; ++sample) {
+    const auto current = timer_now_ns();
+    if (current > previous) {
+      minimum_positive_delta = std::min(minimum_positive_delta, current - previous);
+    }
+    previous = current;
+  }
+  return minimum_positive_delta == std::numeric_limits<std::uint64_t>::max()
+             ? 0
+             : minimum_positive_delta;
+}
+
 [[nodiscard]] std::uint64_t timer_overhead_ns() noexcept {
   constexpr std::size_t kBatches = 101;
   constexpr std::size_t kPairsPerBatch = 64;
@@ -216,6 +231,7 @@ template <OrderBook Book>
   LatencyHistogram histogram;
   histogram.reset();
   const auto overhead_ns = timer_overhead_ns();
+  const auto resolution_ns = timer_resolution_ns();
   const auto expected_events = source.event_count();
 
 #if defined(__linux__)
@@ -387,7 +403,9 @@ template <OrderBook Book>
             << "signal_checksum=" << signal_checksum << '\n'
             << "allocation_tracking=after_startup_done\n"
             << "hot_path_allocations=" << measured_allocations << '\n'
-            << "timer=steady_clock timer_overhead_ns=" << overhead_ns << '\n'
+            << "ring_hop=included\n"
+            << "timer=steady_clock timer_resolution_estimate_ns=" << resolution_ns
+            << " timer_overhead_ns=" << overhead_ns << '\n'
             << "p50_ns=" << (p50 ? std::to_string(*p50) : "n/a") << '\n'
             << "p99_ns=" << (p99 ? std::to_string(*p99) : "n/a") << '\n'
             << "p99.9_ns=" << (p999 ? std::to_string(*p999) : "n/a") << '\n'

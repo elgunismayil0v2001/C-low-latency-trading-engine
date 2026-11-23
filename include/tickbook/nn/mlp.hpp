@@ -18,10 +18,12 @@
 namespace tickbook::nn {
 
 inline constexpr std::size_t kMlpFeatureCount = 11;
-inline constexpr std::size_t kMlpHiddenWidth = 16;
+inline constexpr std::size_t kMlpHiddenWidth = 16; // Default training width.
+inline constexpr std::size_t kMlpMaximumHiddenWidth = 32;
 inline constexpr std::size_t kMlpLayerCount = 3;
 inline constexpr std::size_t kMlpMaximumOutputWidth = 3;
-inline constexpr std::size_t kMlpMaximumLayerWeights = kMlpHiddenWidth * kMlpHiddenWidth;
+inline constexpr std::size_t kMlpMaximumLayerWeights =
+    kMlpMaximumHiddenWidth * kMlpMaximumHiddenWidth;
 inline constexpr std::uint32_t kWeightsVersion = 1;
 inline constexpr std::uint32_t kWeightsEndianness = 0x01020304U;
 inline constexpr std::array<char, 8> kWeightsMagic{'T', 'I', 'C', 'K', 'N', 'N', '0', '1'};
@@ -71,7 +73,7 @@ struct MlpModel {
   std::array<LayerDescriptor, kMlpLayerCount> layers{};
   std::array<std::array<float, kMlpMaximumLayerWeights>, kMlpLayerCount> weights{};
   std::array<std::array<float, kMlpMaximumLayerWeights>, kMlpLayerCount> vector_weights{};
-  std::array<std::array<float, kMlpHiddenWidth>, kMlpLayerCount> biases{};
+  std::array<std::array<float, kMlpMaximumHiddenWidth>, kMlpLayerCount> biases{};
 
   [[nodiscard]] std::uint32_t output_width() const noexcept {
     return layers[kMlpLayerCount - 1].output_width;
@@ -88,8 +90,8 @@ struct MlpModel {
   [[nodiscard]] InferenceOutput infer_scalar(const FeatureVector& features) const noexcept {
     std::array<float, kMlpFeatureCount> input{};
     features_to_float(features, input_mean, input_inverse_standard_deviation, input);
-    std::array<float, kMlpHiddenWidth> first{};
-    std::array<float, kMlpHiddenWidth> second{};
+    std::array<float, kMlpMaximumHiddenWidth> first{};
+    std::array<float, kMlpMaximumHiddenWidth> second{};
     const float* current = input.data();
     for (std::size_t layer_index = 0; layer_index < kMlpLayerCount; ++layer_index) {
       const auto& layer = layers[layer_index];
@@ -121,7 +123,7 @@ struct MlpModel {
       const auto& source = weights[layer_index];
       for (std::size_t input_index = 0; input_index < layer.input_width; ++input_index) {
         for (std::size_t output = 0; output < layer.output_width; ++output) {
-          destination[input_index * kMlpHiddenWidth + output] =
+          destination[input_index * kMlpMaximumHiddenWidth + output] =
               source[output * layer.input_width + input_index];
         }
       }
@@ -137,44 +139,44 @@ private:
   [[nodiscard]] InferenceOutput infer_vectorized(const FeatureVector& features) const noexcept {
     std::array<float, kMlpFeatureCount> input{};
     features_to_float(features, input_mean, input_inverse_standard_deviation, input);
-    std::array<float, kMlpHiddenWidth> first{};
-    std::array<float, kMlpHiddenWidth> second{};
-    vector_layer<kMlpFeatureCount, kMlpHiddenWidth, true>(
-        input.data(), first.data(), VectorLayerData{vector_weights[0].data(), biases[0].data()});
-    vector_layer<kMlpHiddenWidth, kMlpHiddenWidth, true>(
-        first.data(), second.data(), VectorLayerData{vector_weights[1].data(), biases[1].data()});
-    if (output_width() == 1) {
-      vector_layer<kMlpHiddenWidth, 1, false>(
-          second.data(), first.data(), VectorLayerData{vector_weights[2].data(), biases[2].data()});
-    } else {
-      vector_layer<kMlpHiddenWidth, 3, false>(
-          second.data(), first.data(), VectorLayerData{vector_weights[2].data(), biases[2].data()});
-    }
+    std::array<float, kMlpMaximumHiddenWidth> first{};
+    std::array<float, kMlpMaximumHiddenWidth> second{};
+    vector_layer<true>(
+        input.data(), first.data(), layers[0],
+        VectorLayerData{vector_weights[0].data(), biases[0].data()});
+    vector_layer<true>(
+        first.data(), second.data(), layers[1],
+        VectorLayerData{vector_weights[1].data(), biases[1].data()});
+    vector_layer<false>(
+        second.data(), first.data(), layers[2],
+        VectorLayerData{vector_weights[2].data(), biases[2].data()});
     InferenceOutput result{};
     result.count = output_width();
     for (std::size_t index = 0; index < result.count; ++index) result.values[index] = first[index];
     return result;
   }
 
-  template <std::size_t InputWidth, std::size_t OutputWidth, bool Relu>
+  template <bool Relu>
   static void vector_layer(const float* input, float* output,
+                           const LayerDescriptor& descriptor,
                            const VectorLayerData& parameters) noexcept {
     const auto* weights = parameters.weights;
     const auto* biases = parameters.biases;
-    for (std::size_t output_index = 0; output_index < OutputWidth; output_index += 4) {
+    for (std::size_t output_index = 0; output_index < descriptor.output_width; output_index += 4) {
 #if defined(__ARM_NEON)
       auto sum = vdupq_n_f32(0.0F);
-      for (std::size_t input_index = 0; input_index < InputWidth; ++input_index) {
-        sum = vfmaq_n_f32(sum, vld1q_f32(weights + input_index * kMlpHiddenWidth + output_index),
-                          input[input_index]);
+      for (std::size_t input_index = 0; input_index < descriptor.input_width; ++input_index) {
+        sum = vfmaq_n_f32(
+            sum, vld1q_f32(weights + input_index * kMlpMaximumHiddenWidth + output_index),
+            input[input_index]);
       }
       auto value = vaddq_f32(sum, vld1q_f32(biases + output_index));
       if constexpr (Relu) value = vmaxq_f32(value, vdupq_n_f32(0.0F));
       vst1q_f32(output + output_index, value);
 #elif defined(__SSE2__)
       auto sum = _mm_setzero_ps();
-      for (std::size_t input_index = 0; input_index < InputWidth; ++input_index) {
-        const auto row = weights + input_index * kMlpHiddenWidth + output_index;
+      for (std::size_t input_index = 0; input_index < descriptor.input_width; ++input_index) {
+        const auto row = weights + input_index * kMlpMaximumHiddenWidth + output_index;
         sum = _mm_add_ps(sum, _mm_mul_ps(_mm_loadu_ps(row), _mm_set1_ps(input[input_index])));
       }
       auto value = _mm_add_ps(sum, _mm_loadu_ps(biases + output_index));
@@ -271,11 +273,12 @@ namespace weights_detail {
     descriptor.activation = static_cast<Activation>(activation);
     cursor += kLayerDescriptorSize;
   }
+  const auto hidden_width = candidate.layers[0].output_width;
   const auto valid_dimensions = candidate.layers[0].input_width == kMlpFeatureCount &&
-                                candidate.layers[0].output_width == kMlpHiddenWidth &&
-                                candidate.layers[1].input_width == kMlpHiddenWidth &&
-                                candidate.layers[1].output_width == kMlpHiddenWidth &&
-                                candidate.layers[2].input_width == kMlpHiddenWidth &&
+                                hidden_width > 0 && hidden_width <= kMlpMaximumHiddenWidth &&
+                                candidate.layers[1].input_width == hidden_width &&
+                                candidate.layers[1].output_width == hidden_width &&
+                                candidate.layers[2].input_width == hidden_width &&
                                 (candidate.layers[2].output_width == 1 ||
                                  candidate.layers[2].output_width == kMlpMaximumOutputWidth) &&
                                 candidate.layers[0].activation == Activation::Relu &&
@@ -352,7 +355,7 @@ namespace weights_detail {
   case WeightsLoadError::WrongEndianness: return "weights endianness marker is invalid";
   case WeightsLoadError::WrongLayerCount: return "weights layer count is invalid";
   case WeightsLoadError::InvalidDimensions:
-    return "weights dimensions or activations do not match 11-16-16-output MLP";
+    return "weights dimensions or activations do not match 11-H-H-output MLP (H must be 1..32)";
   case WeightsLoadError::InvalidActivation: return "weights activation id is unsupported";
   case WeightsLoadError::SizeMismatch: return "weights file size does not match its dimensions";
   case WeightsLoadError::ChecksumMismatch: return "weights CRC32 does not match";
