@@ -8,19 +8,19 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 Milestones 1, 2.1–2.6, 2.8, 3.1–3.3, 4.2, 4.4, 5.1–5.3, 6.1–6.6, and 7.1–7.3 are implemented. Milestone 4.1 adds a Release-only
 per-event replay histogram; its Linux zero-minor-fault assertion still needs a Linux run. The
 milestone 4.3 five-run comparison is recorded below; its Linux `perf` flame graph remains pending.
-`OffsetArrayBook` uses a fixed window centered on its first accepted price and ignores later
-out-of-window levels. The 2019-12-01 `compare_books` run matched the top five through event
-2,919,722, then diverged when the bounded window omitted a level retained by `BookMap`. Milestone
-2.7 tooling is implemented: parser fuzz targets, CI gates, a
-local gate script, and a pinned Ubuntu toolchain. AppleClang plain, ASan/UBSan, and TSan builds
-with warnings-as-errors each pass all 112 tests.
-The milestone 6 utility sources pass targeted clang-tidy;
-the project-wide static script still reports existing warning-as-error findings in unrelated
-book, sequencing and converter code. All five 60-second parser and weights-loader fuzz smoke targets
-pass locally. The Ubuntu workflow jobs have not run here. After installing the training packages,
-the local Python suite passes all 16 tests when the parity executable is built. Three monthly sample days
-now support one walk-forward test fold; its results are reported below and are not enough to claim
-a stable edge.
+`OffsetArrayBook` starts with a 65,536-tick window. When the best bid enters the upper quarter or
+the best ask enters the lower quarter, it shifts the window by half its width and preserves every
+level in the overlap; levels outside the new window are discarded. An isolated far-away update does
+not trigger a shift. The 2019-12-01 `compare_books` run matched top five for all 6,907,104 events.
+A 24-hour synthetic path moving BTCUSDT from $40,000 to $41,200 also matched top five for all
+57,620 events with the default window. Milestone 2.7 tooling is implemented: parser fuzz targets,
+CI gates, a local gate script, and a pinned Ubuntu toolchain. AppleClang plain, ASan/UBSan, and TSan
+builds with warnings-as-errors each pass all 114 tests. The static job passes with clang-format-18
+and clang-tidy-18; the script excludes three noisy checks documented at the call site. All five
+60-second parser and weights-loader fuzz smoke targets pass locally. The Ubuntu workflow jobs have
+not run here. After installing the training packages, the local Python suite passes all 16 tests
+when the parity executable is built. Three monthly sample days now support one walk-forward test
+fold; its results are reported below and are not enough to claim a stable edge.
 
 ## Build and test
 
@@ -112,8 +112,10 @@ numbers, not trading latency.
 ### Five-run replay comparison (milestone 4.3)
 
 Each cell shows the median of five per-run measurements and the min–max run range. All runs used
-the same Binance BTCUSDT 2019-12-01 binary (6,907,104 events), one full warm-up before measurement,
-and 30 seconds between runs. Layouts ran interleaved. Hardware: Apple M2 MacBook Air, 8 GB, macOS
+the same Binance BTCUSDT 2019-12-01 binary (6,907,104 events), with one full warm-up before
+measurement and 30 seconds between runs. The BookMap and FlatBook rows are unchanged layout
+baselines; OffsetArrayBook was remeasured with edge-triggered recentering.
+Hardware: Apple M2 MacBook Air, 8 GB, macOS
 27.2.1; compiler: Apple LLVM 21.0.0; flags: `-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow
 -Werror`. These are replay ring-pop-to-book-apply latencies after subtracting the measured timer
 overhead, in nanoseconds. They are not trading latency.
@@ -122,17 +124,16 @@ overhead, in nanoseconds. They are not trading latency.
 | --- | ---: | ---: | ---: | ---: |
 | `BookMap` | 28 (27–61) | 111 (111–231) | 155 (155–991) | 54,527 (11,069–3,124,728) |
 | `FlatBook` | 1,055 (1,055–1,087) | 2,111 (2,111–3,007) | 2,495 (2,175–16,383) | 5,262,236 (82,901–73,262,861) |
-| `OffsetArrayBook` | 26 (25–27) | 28 (27–109) | 111 (111–195) | 624,777 (40,152–1,369,611) |
+| `OffsetArrayBook` | 26 (25–27) | 67 (26–69) | 151 (69–155) | 302,359 (81,853–28,712,652) |
 
-The OffsetArrayBook row was rerun after changing to the fixed-window, ignore-out-of-window policy;
-the earlier row used circular recentering. Its median p50 moved from 28 to 26 ns, while p99 and
-p99.9 medians stayed at 28 and 111 ns. All five OffsetArrayBook runs had zero measured hot-path
-allocations. All five FlatBook runs had zero; BookMap allocated 2,671,052 times per run. macOS
-reports process-scoped minor faults rather than asserting zero: run counts ranged 1–10 for BookMap,
-1–24 for FlatBook, and 0–2 for OffsetArrayBook. The fanless M2 showed substantial max-latency and
-fault-count spread, so the
-percentile ranges are shown and the exact maxima are not used to set the budget. The Linux x86
-comparison and flame graph remain needed for the authoritative pinned-core profile.
+The current OffsetArrayBook row includes edge-triggered recentering. Recenter copies and recounts
+the retained overlap, so its rare shifts raise the tail percentiles; the five runs still measured
+zero hot-path allocations. All five FlatBook runs had zero; BookMap allocated 2,671,052 times per
+run. macOS reports process-scoped minor faults rather than asserting zero: run counts ranged 1–10
+for BookMap, 1–24 for FlatBook, and 0–2 for OffsetArrayBook. The fanless M2 showed substantial
+max-latency and fault-count spread, so percentile ranges are shown and exact maxima are not used
+to set the budget. The Linux x86 comparison and flame graph remain needed for the authoritative
+pinned-core profile.
 
 To capture that profile on Linux with `perf` and Brendan Gregg's FlameGraph scripts available on
 `PATH`, build the benchmark with debug symbols and run the best measured layout:
@@ -150,15 +151,15 @@ claimed here.
 ## Per-event latency budget (milestone 4.4)
 
 The target is **p99 <= 500 ns/event** for ring pop, book update, feature update, and signal
-evaluation; NN inference shares this total. The budget is based on the OffsetArrayBook baseline
-measured on the Apple M2 MacBook Air, macOS 27.2.1: median p99 28 ns and median p99.9 111 ns over
-five runs. The 500 ns target is about 4.5 times that measured p99.9, leaving room for later stages.
-The original book-only baseline measures ring pop through book apply. The feature-path measurement
+evaluation; NN inference shares this total. The recentered OffsetArrayBook baseline measured on
+the Apple M2 MacBook Air, macOS 27.2.1, had median p99 67 ns and median p99.9 151 ns over five
+runs. The 500 ns target is about 3.3 times that measured p99.9, leaving room for later stages.
+The book-only measurement runs from ring pop through book apply. The feature-path measurement
 below extends it through feature update; signal evaluation and NN inference still need to be added
 before the full budget is verified. Recheck the target against pinned Linux x86 results when available.
 
 The five-run feature-path measurement below includes the `FeatureEngine`: its median p99 was
-407 ns (run range 407–447 ns), leaving 53 ns under the p99 target at the worst observed p99.
+319 ns (run range 319–407 ns), leaving 93 ns under the p99 target at the worst observed p99.
 Milestone 6 adds measured NN inference to this path; its results appear below.
 
 ### Feature path measurement (milestone 5)
@@ -173,12 +174,12 @@ ring-pop-through-book-and-feature processing times, with the measured timer over
 
 | Book and feature path | p50 ns | p99 ns | p99.9 ns | Max ns |
 | --- | ---: | ---: | ---: | ---: |
-| `OffsetArrayBook` + `FeatureEngine` | 27 (27–27) | 407 (407–447) | 575 (527–735) | 775,277 (764,943–1,880,027) |
+| `OffsetArrayBook` + `FeatureEngine` | 27 (26–28) | 319 (319–407) | 447 (447–703) | 260,986 (88,360–13,798,526) |
 
-The earlier book-only five-run table recorded p99 28 ns (28–109) and p99.9 111 ns (111–195).
-Adding feature updates raised these to p99 407 ns (407–447) and p99.9 575 ns (527–735).
-All five runs recorded zero hot-path allocations. Process-wide minor faults ranged from 0 to 2;
-macOS does not provide the Linux zero-fault assertion or core pinning. This one-machine result is
+The book-only five-run median was p99 67 ns and p99.9 151 ns. Adding feature updates raised
+these to p99 319 ns and p99.9 447 ns. All five runs recorded zero hot-path allocations.
+Process-wide minor faults ranged from 0 to 1. macOS does not provide the Linux zero-fault assertion
+or core pinning. This one-machine result is
 not the authoritative pinned-core measurement, and the measured path does not yet include signal
 calculation or inference.
 
@@ -309,7 +310,7 @@ replay processing latencies, not trading latency.
 | --- | ---: | ---: | ---: |
 | Scalar MLP, 11-16-16-3 | 151 (125–151) | 279 (191–487) | 463 (231–575) |
 | SIMD MLP, 11-16-16-3 | 48 (25–57) | 97 (67–135) | 143 (135–175) |
-| Offset book + features + SIMD inference | 27 (26–27) | 487 (487–527) | 735 (623–863) |
+| Offset book + features + SIMD inference | 27 (27–28) | 407 (407–407) | 527 (527–783) |
 
 To compare hidden widths directly, I trained a return model at width 32 and ran five standalone
 million-call measurements for each width on those trained return weights. Values are medians with
@@ -322,22 +323,16 @@ minor faults:
 | 11-32-32-1 | 147 (147–151) | 231 (195–231) | 279 (235–319) |
 
 One combined replay run per width on the same day also included the SPSC ring hop, book update,
-features and inference. Width 16 measured p50/p99/p99.9 of 27/407/487 ns; width 32 measured
-28/543/623 ns. The 32-unit run exceeded the 500 ns p99 budget. These are single-run checks, not
+features and inference. Width 16 measured p50/p99/p99.9 of 28/407/527 ns; width 32 measured
+27/527/1,087 ns. The 32-unit run exceeded the 500 ns p99 budget. These are single-run checks, not
 the five-run table above.
 
 The SIMD inference median p99 was 65% lower than the scalar result for the same width and fixture.
-All five combined replay runs recorded zero hot-path allocations; process minor faults were 0–1
-on macOS. The combined median p99 is 13 ns below the 500 ns target, while two of five runs were
-at 527 ns, so the run range crosses the target. This M2 measurement supports the budget on median
-behavior, but pinned-core Linux confirmation remains pending. Combined exact maxima ranged from
-800,485 to 11,370,026 ns and are reported as scheduler and thermal outliers rather than used to
-set the per-event budget.
-
-A subsequent single-run validation of the final Release warning-as-error binaries processed the
-same input with zero allocations. The SIMD-only check measured p50 28 ns, p99 71 ns and p99.9
-111 ns over 1,000,000 calls, with zero process minor faults. The combined replay check measured
-p50 26 ns, p99 487 ns, p99.9 655 ns and max 857,734 ns; macOS reported four process minor faults.
+All five combined replay runs recorded zero hot-path allocations; process minor faults were 0–2
+on macOS. The combined median p99 was 407 ns across these runs, below the 500 ns target; all five
+measured p99 at 407 ns. Their p99.9 median was 527 ns. This M2 measurement does not replace pinned-
+core Linux confirmation. Exact maxima ranged from 83,152 to 2,166,401 ns and are treated as host
+scheduling and thermal outliers.
 
 To reproduce the inference and combined replay measurements on a Release build:
 
@@ -399,11 +394,9 @@ processing histogram. Percentiles use the fixed log-linear buckets and subtract 
 
 For one local held-out day (Binance BTCUSDT 2019-12-01, 6,907,104 events and 1,236,542 messages),
 the shuffled 3-second return model with 5 ms simulated order latency and the default 10 bps taker
-fee had gross P&L -$176.19, fees $2,769.51, net P&L -$2,945.70 and 22,229 closed trades. The book
-uses the fixed first-price window and ignores later out-of-window levels; `compare_books` diverges
-at event 2,919,723 on this file, so treat this run as a bounded-book simulation, not as a full-depth
-replay. This single day is not evidence of profitability; the negative result does not establish
-an out-of-sample edge.
+fee had gross P&L -$176.21, fees $2,769.48, net P&L -$2,945.69 and 22,229 closed trades. The
+recentered bounded book matched BookMap's top five after every event on this file. This single day
+is not evidence of profitability; the negative result does not establish an out-of-sample edge.
 
 The Release benchmark used the same held-out file and configuration, with one warm-up pass and five
 measured runs per strategy, separated by a 5-second cool-down. Hardware: Apple M2 MacBook Air, 8 GB,
@@ -413,26 +406,24 @@ outliers. The p99 target from milestone 4.4 is 500 ns/event.
 
 | Strategy | p50 ns | p99 ns | p99.9 ns | max ns |
 | --- | ---: | ---: | ---: | ---: |
-| Threshold on `imbalance_l1` | 26 (25–27) | 367 (359–367) | 527 (487–543) | 796,360 (785,859–847,317) |
-| 3-second return MLP | 26 (24–26) | 447 (447–447) | 575 (575–623) | 811,818 (784,651–915,401) |
+| Threshold on `imbalance_l1` | 21 (19–22) | 319 (319–399) | 439 (439–1,023) | 144,854 (81,853–13,496,939) |
+| 3-second return MLP | 22 (21–25) | 399 (399–407) | 527 (527–527) | 109,396 (85,982–1,937,481) |
 
-Both repeated p99 medians fit the 500 ns target on this M2 host; the p99.9 medians exceed it.
-There is no Linux pinned-core run yet. With all other code held at the final version, one
-threshold replay p99 fell from 959 ns without the checked fast path to 407 ns with it, with
-identical fills and P&L; the five-run fast-path median p99 was 367 ns. The slow wide division
-remains for values whose product overflows 64 bits. A temporary harness checked the wide arithmetic
-against 100,000 deterministic random products. The 111-test GoogleTest suite passed in plain,
-ASan/UBSan and TSan builds.
+Both repeated p99 medians fit the 500 ns target on this M2 host; the return model's p99.9 median
+exceeds it. There is no Linux pinned-core run yet. The negative results do not establish an
+out-of-sample edge.
 
 ## Order book layouts
 
 `BookMap` is the full-depth reference. `FlatBook` stores the best 4,096 levels per side by
 default. At capacity it drops the worst retained level when a better one arrives and ignores
 updates below its retained range. It reserves its vectors at construction. `OffsetArrayBook`
-uses a fixed window of 65,536 price ticks by default; pass the fixed-point tick size as the
-second constructor argument when it is greater than one. It centers that fixed window on the
-first accepted level and ignores every later out-of-window level; it never moves the window or
-evicts retained levels because of a deep update. Both optimized books avoid allocations during
+uses a window of 65,536 price ticks by default; pass the fixed-point tick size as the second
+constructor argument when it is greater than one. The first accepted level centers the window.
+When the best bid reaches the upper quarter or the best ask reaches the lower quarter, the book
+shifts the window by half its width. It keeps every level in the old/new overlap and drops levels
+outside the new window. A far-away update by itself does not trigger recentering. Recenter shifts
+reuse preallocated storage and do not allocate. Both optimized books avoid allocations during
 updates.
 
 `compare_books` uses each bounded book's fixed default capacity and compares best levels,
@@ -443,35 +434,14 @@ units when it is greater than one (the default is one):
 
     build/compare_books /path/to/day.bin --price-tick 1
 
-On the final BookMap state from BTCUSDT 2019-12-01 (3,415 bid levels, 3,783 ask levels),
-the old full traversal averaged 51,832 ns per bid+ask top-five query (run range 46,388–53,535 ns);
-stopping each visitor after five levels averaged 7.02 ns (6.59–9.81 ns). Each median is
-from seven runs of 20,000 queries. Hardware: Apple M2 MacBook Air, macOS 27.2.1. Compiler:
-Apple LLVM 21.0.0, `-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow -Werror`. This is a
-batch-average visitor microbenchmark with the book already in memory, not replay event latency;
-runs were back-to-back without a cool-down.
+With this policy, `compare_books` matched the top five against `BookMap` on all 6,907,104 events
+from BTCUSDT 2019-12-01. The final BookMap had 3,415 bid levels and 3,783 ask levels; the offset
+book retained 960 bids and 1,006 asks inside its final window.
 
-### Preliminary book-apply microbenchmark
-
-This measures an in-memory event loop, not end-to-end replay latency. Each value is the
-median elapsed batch time divided by 150,010 events across seven runs; the ranges show the
-minimum and maximum run averages. The same seeded synthetic BTCUSDT file (seed 4242,
-50,000 messages) was used for each layout. Hardware: Apple M2 MacBook Air, macOS 27.2.1.
-Compiler: Apple LLVM 21.0.0, `-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow -Werror`.
-No minor faults were observed in the measured loops. These are batch averages, not per-event
-tail percentiles; milestone 4 adds the latency histogram. Runs were back-to-back without a
-cool-down, so treat the ranges as exploratory on the fanless M2 Air.
-
-| Layout | Median ns/event | Run range ns/event |
-| --- | ---: | ---: |
-| `BookMap` | 8.65 | 7.86–9.82 |
-| `FlatBook` | 9.85 | 9.46–10.81 |
-| `OffsetArrayBook` (circular recentering) | 3.39 | 3.24–3.42 |
-| `OffsetArrayBook` before circular recentering | 23.62 | 21.59–31.56 |
-
-The circular recentering change reduced the offset book's median on this fixture by about
-86%. `FlatBook` was slower than `BookMap` on this shallow synthetic stream, so these numbers
-do not establish a general speedup for the flat layout.
+A synthetic 24-hour quote path started at $40,000 and ended at $41,200, a 3% rise over 1,440
+one-minute updates. Conversion produced 57,620 events. With the default 65,536-tick window and
+one fixed-point unit per tick, `compare_books` matched the top five after every event; all three
+books ended with 10 bid and 10 ask levels.
 
 ## Design rules
 
