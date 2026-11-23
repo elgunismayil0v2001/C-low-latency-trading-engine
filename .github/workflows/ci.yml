@@ -36,7 +36,7 @@ jobs:
             ${{ runner.os }}-${{ matrix.compiler }}-${{ matrix.sanitizer }}-
       - name: Configure, build and test
         env:
-          CCACHE_DIR: ~/.cache/ccache
+          CCACHE_DIR: /home/runner/.cache/ccache
         run: |
           if [ "${{ matrix.compiler }}" = "g++" ]; then
             compiler=g++-13
