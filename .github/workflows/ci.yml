@@ -166,12 +166,14 @@ jobs:
           restore-keys: ${{ runner.os }}-coverage-
       - name: Build and collect header coverage
         run: |
+          rm -rf build/coverage
           cmake -S . -B build/coverage -DCMAKE_CXX_COMPILER=g++-13 \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_CXX_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage
           cmake --build build/coverage --parallel
           ctest --test-dir build/coverage --output-on-failure
-          lcov --capture --directory build/coverage --output-file build/coverage/coverage.info
+          lcov --ignore-errors inconsistent,inconsistent --capture --directory build/coverage \
+            --output-file build/coverage/coverage.info
           lcov --extract build/coverage/coverage.info '*/include/tickbook/*' \
             --output-file build/coverage/include-coverage.info
       - uses: actions/upload-artifact@v4

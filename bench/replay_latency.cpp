@@ -437,11 +437,8 @@ void* operator new(std::size_t size) {
 
 void* operator new[](std::size_t size) { return ::operator new(size); }
 
-void operator delete(void* memory) noexcept { std::free(memory); }
-void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
-void operator delete[](void* memory) noexcept { std::free(memory); }
-void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
-
+// Keep runtime deallocation paired with these allocations. TSan supplies the aligned array
+// delete definitions.
 void* operator new(std::size_t size, std::align_val_t alignment) {
   void* memory = nullptr;
   const auto alignment_size = static_cast<std::size_t>(alignment);
@@ -455,11 +452,6 @@ void* operator new(std::size_t size, std::align_val_t alignment) {
 void* operator new[](std::size_t size, std::align_val_t alignment) {
   return ::operator new(size, alignment);
 }
-
-void operator delete(void* memory, std::align_val_t) noexcept { std::free(memory); }
-void operator delete(void* memory, std::size_t, std::align_val_t) noexcept { std::free(memory); }
-void operator delete[](void* memory, std::align_val_t) noexcept { std::free(memory); }
-void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept { std::free(memory); }
 
 int main(int argc, char** argv) try {
   if (argc == 2 && std::string_view(argv[1]) == "--help") {
