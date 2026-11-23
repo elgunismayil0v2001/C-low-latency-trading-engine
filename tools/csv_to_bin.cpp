@@ -24,10 +24,10 @@
 namespace tickbook {
 namespace {
 
-constexpr std::size_t kGzipBufferSize = 16 * 1024;
+constexpr std::size_t kGzipBufferSize = std::size_t{16} * 1024;
 
-enum class CsvKind { Book, Trades };
-enum class ReadStatus { Row, End, Error };
+enum class CsvKind : std::uint8_t { Book, Trades };
+enum class ReadStatus : std::uint8_t { Row, End, Error };
 
 struct CsvRecord {
   std::uint64_t event_timestamp_us{};

@@ -5,7 +5,6 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -109,7 +108,8 @@ public:
   }
 
   [[nodiscard]] static std::string system_error(std::string_view operation, int error_code) {
-    return std::string(operation) + ": " + std::strerror(error_code);
+    return std::string(operation) + ": " +
+           std::error_code(error_code, std::generic_category()).message();
   }
 
 private:

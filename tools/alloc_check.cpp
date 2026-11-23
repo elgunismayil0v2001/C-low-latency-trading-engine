@@ -76,9 +76,9 @@ std::array<tickbook::Event, kFixtureEventCount> make_fixture_events() noexcept {
   std::array<tickbook::Event, kFixtureEventCount> events{};
   for (std::size_t i = 0; i < events.size(); ++i) {
     auto& event = events[i];
-    event.ts_ns = static_cast<std::int64_t>(i + 1);
+    event.ts_ns = static_cast<std::int64_t>(i) + 1;
     event.price = i % 2 == 0 ? 10'000 : 10'100;
-    event.qty = static_cast<std::int64_t>(i + 1);
+    event.qty = static_cast<std::int64_t>(i) + 1;
     event.type = i < 2 ? tickbook::EventType::SnapshotLevel : tickbook::EventType::BookUpdate;
     event.side = i % 2 == 0 ? tickbook::Side::Bid : tickbook::Side::Ask;
     event.flags = tickbook::kEventFlagEndOfMessage;

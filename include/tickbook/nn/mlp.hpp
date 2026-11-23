@@ -141,15 +141,12 @@ private:
     features_to_float(features, input_mean, input_inverse_standard_deviation, input);
     std::array<float, kMlpMaximumHiddenWidth> first{};
     std::array<float, kMlpMaximumHiddenWidth> second{};
-    vector_layer<true>(
-        input.data(), first.data(), layers[0],
-        VectorLayerData{vector_weights[0].data(), biases[0].data()});
-    vector_layer<true>(
-        first.data(), second.data(), layers[1],
-        VectorLayerData{vector_weights[1].data(), biases[1].data()});
-    vector_layer<false>(
-        second.data(), first.data(), layers[2],
-        VectorLayerData{vector_weights[2].data(), biases[2].data()});
+    vector_layer<true>(input.data(), first.data(), layers[0],
+                       VectorLayerData{vector_weights[0].data(), biases[0].data()});
+    vector_layer<true>(first.data(), second.data(), layers[1],
+                       VectorLayerData{vector_weights[1].data(), biases[1].data()});
+    vector_layer<false>(second.data(), first.data(), layers[2],
+                        VectorLayerData{vector_weights[2].data(), biases[2].data()});
     InferenceOutput result{};
     result.count = output_width();
     for (std::size_t index = 0; index < result.count; ++index) result.values[index] = first[index];
@@ -157,8 +154,7 @@ private:
   }
 
   template <bool Relu>
-  static void vector_layer(const float* input, float* output,
-                           const LayerDescriptor& descriptor,
+  static void vector_layer(const float* input, float* output, const LayerDescriptor& descriptor,
                            const VectorLayerData& parameters) noexcept {
     const auto* weights = parameters.weights;
     const auto* biases = parameters.biases;
@@ -166,9 +162,9 @@ private:
 #if defined(__ARM_NEON)
       auto sum = vdupq_n_f32(0.0F);
       for (std::size_t input_index = 0; input_index < descriptor.input_width; ++input_index) {
-        sum = vfmaq_n_f32(
-            sum, vld1q_f32(weights + input_index * kMlpMaximumHiddenWidth + output_index),
-            input[input_index]);
+        sum = vfmaq_n_f32(sum,
+                          vld1q_f32(weights + input_index * kMlpMaximumHiddenWidth + output_index),
+                          input[input_index]);
       }
       auto value = vaddq_f32(sum, vld1q_f32(biases + output_index));
       if constexpr (Relu) value = vmaxq_f32(value, vdupq_n_f32(0.0F));

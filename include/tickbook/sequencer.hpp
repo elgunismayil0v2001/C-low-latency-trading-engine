@@ -3,7 +3,7 @@
 
 namespace tickbook {
 
-enum class SeqAction { Drop, Apply, Resync };
+enum class SeqAction : std::uint8_t { Drop, Apply, Resync };
 
 // Binance diff-depth synchronisation. Call once for each complete WebSocket message,
 // before flattening its price levels; this also sequences messages with empty level arrays.

@@ -5,7 +5,6 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
 #include <iterator>
 #include <limits>
@@ -13,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include <fcntl.h>
@@ -119,7 +119,7 @@ public:
       return false;
     }
 
-    struct stat info{};
+    struct stat info {};
     if (::fstat(descriptor, &info) != 0) {
       const int error_code = errno;
       ::close(descriptor);
@@ -209,7 +209,8 @@ public:
 private:
   [[nodiscard]] static std::string system_error(std::string_view operation,
                                                 const std::filesystem::path& path, int error_code) {
-    return std::string(operation) + " '" + path.string() + "': " + std::strerror(error_code);
+    return std::string(operation) + " '" + path.string() +
+           "': " + std::error_code(error_code, std::generic_category()).message();
   }
 
   void take(BinaryReplay& other) noexcept {
