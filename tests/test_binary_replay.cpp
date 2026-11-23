@@ -195,3 +195,15 @@ TEST(BinaryReplay, AcceptsAnEmptyEventPayloadAndMissingFileFailsClearly) {
   EXPECT_FALSE(replay.is_open());
 }
 
+TEST(BinaryReplay, OpensWithoutRequestingPageLocksByDefault) {
+  TempFiles files;
+  const std::array<tickbook::Event, 0> no_events{};
+  const auto bytes = make_file(no_events);
+  ASSERT_TRUE(write_file(files.file("unlocked.bin"), bytes));
+
+  tickbook::BinaryReplay replay;
+  std::string error;
+  ASSERT_TRUE(replay.open(files.file("unlocked.bin"), error, false)) << error;
+  EXPECT_FALSE(replay.pages_locked());
+}
+

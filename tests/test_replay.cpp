@@ -126,7 +126,8 @@ TEST(Replay, GoldenFileMatchesFinalBookCountAndChecksumDeterministically) {
   const auto bytes = make_file(events);
   ASSERT_TRUE(write_file(files.file("golden.bin"), bytes));
 
-  const auto first = tickbook::run_binary_replay<2>(files.file("golden.bin"));
+  const tickbook::ReplayOptions default_options{};
+  const auto first = tickbook::run_binary_replay<2>(files.file("golden.bin"), default_options);
   ASSERT_TRUE(first.success) << first.error;
   EXPECT_EQ(first.symbol, test_symbol());
   EXPECT_EQ(first.price_scale, 2);

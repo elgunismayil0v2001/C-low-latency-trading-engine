@@ -41,6 +41,11 @@ struct ReplaySummary {
   std::uint64_t book_checksum{};
 };
 
+struct ReplayOptions {
+  bool lock_pages{};
+  bool pin_threads{};
+};
+
 namespace replay_detail {
 
 #if defined(__linux__)
@@ -160,10 +165,11 @@ inline std::uint64_t book_checksum(const BookMap& book) noexcept {
 } // namespace replay_detail
 
 template <std::size_t RingCapacity = kReplayRingCapacity>
-[[nodiscard]] ReplaySummary run_binary_replay(const std::filesystem::path& path) {
+[[nodiscard]] ReplaySummary run_binary_replay(const std::filesystem::path& path,
+                                              ReplayOptions options = {}) {
   ReplaySummary result{};
   BinaryReplay source;
-  if (!source.open(path, result.error)) return result;
+  if (!source.open(path, result.error, options.lock_pages)) return result;
 
   result.symbol = source.symbol();
   result.price_scale = source.price_scale();
@@ -171,7 +177,11 @@ template <std::size_t RingCapacity = kReplayRingCapacity>
 
 #if defined(__linux__)
   replay_detail::ReplayAffinity affinity;
-  if (!affinity.prepare(result.error) || !affinity.pin_consumer(result.error)) return result;
+  bool consumer_pinned = false;
+  if (options.pin_threads) {
+    if (!affinity.prepare(result.error) || !affinity.pin_consumer(result.error)) return result;
+    consumer_pinned = true;
+  }
 #endif
 
   SpscRing<Event, RingCapacity> ring;
@@ -216,7 +226,9 @@ template <std::size_t RingCapacity = kReplayRingCapacity>
   }
 
 #if defined(__linux__)
-  producer_affinity_error = affinity.pin_producer(producer.native_handle());
+  if (options.pin_threads) {
+    producer_affinity_error = affinity.pin_producer(producer.native_handle());
+  }
   // This release starts the producer after its affinity result is visible to it.
   producer_start.store(true, std::memory_order_release);
 #endif
@@ -245,7 +257,7 @@ template <std::size_t RingCapacity = kReplayRingCapacity>
   producer.join();
 
 #if defined(__linux__)
-  affinity.restore_consumer();
+  if (consumer_pinned) affinity.restore_consumer();
   if (producer_affinity_error != 0) {
     result.error = replay_detail::ReplayAffinity::system_error("cannot pin replay producer",
                                                                producer_affinity_error);

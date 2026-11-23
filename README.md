@@ -68,16 +68,20 @@ transition into a snapshot and tells the consumer to clear its book before apply
 level. Tardis data remains local and is not included in the repository.
 
 `BinaryReplay` keeps event records as views into the mapped file. On Linux it requests
-`MAP_POPULATE` and locks the mapped pages; the process needs a locked-memory allowance
-large enough for the replay file.
+`MAP_POPULATE`; locking the mapped pages is optional and off by default, so normal replay
+does not need a large locked-memory allowance.
 
     build/replay BTCUSDT.bin
+
+Pass `--lock-pages` to request `mlock`, or `--pin-threads` to pin the producer and consumer
+to separate physical cores on Linux. Both options are opt-in; replay without them works when
+the process cannot lock the whole file or only one CPU is available.
 
 `replay` reports the event count, final best levels and depth counts, plus a deterministic
 checksum over the complete final book. It clears the book when it reaches a snapshot-start
 event. The replay uses a lossless producer-to-consumer SPSC ring; it yields while waiting
-for space or data outside latency measurement runs. Linux pins producer and consumer to
-distinct physical cores; macOS does not support this pinning path.
+for space or data outside latency measurement runs. macOS does not support the Linux pinning
+option.
 
 ## Latency histogram (milestone 4.1)
 
@@ -92,9 +96,10 @@ Build the Release-only benchmark separately from sanitizer builds:
 does one full warm-up replay, then times each successful ring pop through snapshot handling
 and book apply. It subtracts the average back-to-back `steady_clock` read overhead. The fixed
 histogram has exact 0–31 ns buckets and 32 sub-buckets per power of two above that; reported
-percentiles are the selected bucket's upper edge and `max_ns` is exact. Linux pins both threads,
-uses the replay mapping's `MAP_POPULATE`/`mlock` path, and fails if process minor faults are
-nonzero. macOS cannot pin threads; it reports process-wide minor faults without asserting zero.
+percentiles are the selected bucket's upper edge and `max_ns` is exact. Page locking and Linux
+thread pinning are opt-in with `--lock-pages` and `--pin-threads`; default runs do not require
+either system resource. Linux fails if process minor faults are nonzero. macOS cannot pin
+threads; it reports process-wide minor faults without asserting zero.
 
 One measured `BookMap` pass over BTCUSDT 2019-12-01 on the Apple M2 MacBook Air (macOS 27.2.1),
 Apple LLVM 21.0.0, `-O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wshadow -Werror`, covered 6,907,104
@@ -379,7 +384,7 @@ There is no Linux pinned-core run yet. With all other code held at the final ver
 threshold replay p99 fell from 959 ns without the checked fast path to 407 ns with it, with
 identical fills and P&L; the five-run fast-path median p99 was 367 ns. The slow wide division
 remains for values whose product overflows 64 bits. A temporary harness checked the wide arithmetic
-against 100,000 deterministic random products. The 110-test GoogleTest suite passed in plain,
+against 100,000 deterministic random products. The 111-test GoogleTest suite passed in plain,
 ASan/UBSan and TSan builds.
 
 ## Order book layouts

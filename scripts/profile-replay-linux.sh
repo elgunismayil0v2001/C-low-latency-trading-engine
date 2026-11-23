@@ -36,7 +36,7 @@ trap 'rm -rf "$temporary_dir"' EXIT
 perf_data="$temporary_dir/replay-offset.data"
 
 "$perf_bin" record -F 999 -g --call-graph dwarf -o "$perf_data" -- \
-  "$replay_latency" "$dataset" --book offset --price-tick "$price_tick"
+  "$replay_latency" "$dataset" --book offset --price-tick "$price_tick" --pin-threads
 "$perf_bin" script -i "$perf_data" |
   "$stackcollapse" |
   "$flamegraph" --title "tickbook OffsetArrayBook replay" > "$output_svg"

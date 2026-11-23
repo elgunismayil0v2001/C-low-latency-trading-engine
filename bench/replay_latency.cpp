@@ -143,7 +143,7 @@ void touch_stack_pages() noexcept {
 
 void usage(std::ostream& output) {
   output << "Usage: replay_latency FILE.bin [--book map|flat|offset] [--price-tick UNITS] "
-            "[--features] [--weights WEIGHTS.bin]\n";
+            "[--features] [--weights WEIGHTS.bin] [--lock-pages] [--pin-threads]\n";
 }
 
 [[nodiscard]] bool load_weights_file(const std::filesystem::path& path, nn::MlpModel& model,
@@ -201,7 +201,10 @@ std::uint64_t warm_up(BinaryReplay& source, Book& book, FeatureEngine* features,
 template <OrderBook Book>
 [[nodiscard]] bool measure_replay(BinaryReplay& source, Book& book, std::string_view selected_book,
                                   Price price_tick, bool enable_features, const nn::MlpModel* model,
-                                  std::string& error) {
+                                  bool pin_threads, std::string& error) {
+#if !defined(__linux__)
+  static_cast<void>(pin_threads);
+#endif
   touch_stack_pages();
   std::optional<FeatureEngine> feature_engine;
   if (enable_features)
@@ -217,7 +220,11 @@ template <OrderBook Book>
 
 #if defined(__linux__)
   replay_detail::ReplayAffinity affinity;
-  if (!affinity.prepare(error) || !affinity.pin_consumer(error)) return false;
+  bool consumer_pinned = false;
+  if (pin_threads) {
+    if (!affinity.prepare(error) || !affinity.pin_consumer(error)) return false;
+    consumer_pinned = true;
+  }
 #endif
 
   std::atomic<bool> producer_start{false};
@@ -267,7 +274,7 @@ template <OrderBook Book>
     });
   } catch (const std::system_error& exception) {
 #if defined(__linux__)
-    affinity.restore_consumer();
+    if (consumer_pinned) affinity.restore_consumer();
 #endif
     error = "cannot start replay latency producer: ";
     error += exception.what();
@@ -275,7 +282,7 @@ template <OrderBook Book>
   }
 
 #if defined(__linux__)
-  producer_affinity_error = affinity.pin_producer(producer.native_handle());
+  if (pin_threads) producer_affinity_error = affinity.pin_producer(producer.native_handle());
 #endif
   // Startup includes the warm-up, all preallocation, and thread creation. Track every
   // allocation from the first replay event through producer and consumer completion.
@@ -450,11 +457,23 @@ int main(int argc, char** argv) try {
   BookKind kind = BookKind::Map;
   Price price_tick = 1;
   bool enable_features = false;
+  bool lock_pages = false;
+  bool pin_threads = false;
   std::filesystem::path weights_path;
   for (int i = 2; i < argc;) {
     const std::string_view option(argv[i]);
     if (option == "--features") {
       enable_features = true;
+      ++i;
+      continue;
+    }
+    if (option == "--lock-pages") {
+      lock_pages = true;
+      ++i;
+      continue;
+    }
+    if (option == "--pin-threads") {
+      pin_threads = true;
       ++i;
       continue;
     }
@@ -488,7 +507,7 @@ int main(int argc, char** argv) try {
 
   BinaryReplay source;
   std::string error;
-  if (!source.open(path, error)) {
+  if (!source.open(path, error, lock_pages)) {
     std::cerr << "replay_latency: " << error << '\n';
     return 1;
   }
@@ -505,19 +524,19 @@ int main(int argc, char** argv) try {
   case BookKind::Map: {
     BookMap book;
     success = measure_replay(source, book, book_name(kind), price_tick, enable_features,
-                             model ? &*model : nullptr, error);
+                             model ? &*model : nullptr, pin_threads, error);
     break;
   }
   case BookKind::Flat: {
     FlatBook book;
     success = measure_replay(source, book, book_name(kind), price_tick, enable_features,
-                             model ? &*model : nullptr, error);
+                             model ? &*model : nullptr, pin_threads, error);
     break;
   }
   case BookKind::Offset: {
     OffsetArrayBook book(kDefaultOffsetArrayWindowSize, price_tick);
     success = measure_replay(source, book, book_name(kind), price_tick, enable_features,
-                             model ? &*model : nullptr, error);
+                             model ? &*model : nullptr, pin_threads, error);
     break;
   }
   }

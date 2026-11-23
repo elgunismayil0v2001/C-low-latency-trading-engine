@@ -104,7 +104,8 @@ public:
 
   ~BinaryReplay() { close(); }
 
-  [[nodiscard]] bool open(const std::filesystem::path& path, std::string& error) {
+  [[nodiscard]] bool open(const std::filesystem::path& path, std::string& error,
+                          bool lock_pages = false) {
     close();
     error.clear();
     if (path.empty()) {
@@ -159,15 +160,15 @@ public:
       error = std::string(binary_file_error_message(validation));
       return false;
     }
-#if defined(__linux__)
-    if (::mlock(mapping, size) != 0) {
-      const int lock_error = errno;
-      ::munmap(mapping, size);
-      error = system_error("cannot lock binary replay pages", path, lock_error);
-      return false;
+    if (lock_pages) {
+      if (::mlock(mapping, size) != 0) {
+        const int lock_error = errno;
+        ::munmap(mapping, size);
+        error = system_error("cannot lock binary replay pages", path, lock_error);
+        return false;
+      }
+      pages_locked_ = true;
     }
-    pages_locked_ = true;
-#endif
 
     mapping_ = mapping;
     mapped_size_ = size;
@@ -198,6 +199,7 @@ public:
   void rewind() noexcept { next_index_ = 0; }
 
   [[nodiscard]] bool is_open() const noexcept { return mapping_ != nullptr; }
+  [[nodiscard]] bool pages_locked() const noexcept { return pages_locked_; }
   [[nodiscard]] std::uint64_t event_count() const noexcept { return file_view_.event_count; }
   [[nodiscard]] std::int32_t price_scale() const noexcept { return file_view_.price_scale; }
   [[nodiscard]] std::int32_t qty_scale() const noexcept { return file_view_.qty_scale; }

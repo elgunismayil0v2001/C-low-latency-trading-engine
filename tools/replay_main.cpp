@@ -7,7 +7,9 @@
 
 namespace {
 
-void usage(std::ostream& output) { output << "Usage: replay FILE.bin\n"; }
+void usage(std::ostream& output) {
+  output << "Usage: replay FILE.bin [--lock-pages] [--pin-threads]\n";
+}
 
 void print_level(std::string_view name, const std::optional<tickbook::Level>& level) {
   std::cout << name << '=';
@@ -23,12 +25,23 @@ int main(int argc, char** argv) {
     usage(std::cout);
     return 0;
   }
-  if (argc != 2) {
+  if (argc < 2) {
     usage(std::cerr);
     return 2;
   }
 
-  const auto result = tickbook::run_binary_replay(argv[1]);
+  tickbook::ReplayOptions options{};
+  for (int index = 2; index < argc; ++index) {
+    const std::string_view option(argv[index]);
+    if (option == "--lock-pages") options.lock_pages = true;
+    else if (option == "--pin-threads") options.pin_threads = true;
+    else {
+      usage(std::cerr);
+      return 2;
+    }
+  }
+
+  const auto result = tickbook::run_binary_replay(argv[1], options);
   if (!result.success) {
     std::cerr << "replay: " << result.error << '\n';
     return 1;
