@@ -49,31 +49,26 @@ TEST(OffsetArrayBook, TracksBestLevelsAndRemovesTheBestWithoutScanningOnEveryUpd
   EXPECT_EQ(asks, (std::vector<tickbook::Price>{105}));
 }
 
-TEST(OffsetArrayBook, SlidesWindowInBothDirectionsAndRetainsOverlappingLevels) {
+TEST(OffsetArrayBook, IgnoresOutOfWindowPricesWithoutMovingTheFixedWindow) {
   tickbook::OffsetArrayBook book(5);
   book.apply(update(tickbook::Side::Bid, 100, 1));
-  book.apply(update(tickbook::Side::Bid, 102, 2));
-  book.apply(update(tickbook::Side::Ask, 103, 3));
-  book.apply(update(tickbook::Side::Ask, 104, 4));
+  book.apply(update(tickbook::Side::Bid, 101, 2));
+  book.apply(update(tickbook::Side::Ask, 102, 3));
+  const auto base = book.window_base();
 
-  book.apply(update(tickbook::Side::Bid, 106, 5)); // Slides the window up to [102, 106].
+  book.apply(update(tickbook::Side::Ask, 104, 5));
+  book.apply(update(tickbook::Side::Bid, 96, 6));
   ASSERT_TRUE(book.window_base().has_value());
-  EXPECT_EQ(*book.window_base(), 102);
+  EXPECT_EQ(book.window_base(), base);
   ASSERT_TRUE(book.best_bid().has_value());
-  EXPECT_EQ(book.best_bid()->price, 106);
-  EXPECT_EQ(book.bid_levels(), 2u); // 100 falls outside; 102 remains.
-  EXPECT_EQ(book.ask_levels(), 2u);
-
-  book.apply(update(tickbook::Side::Ask, 99, 6)); // Slides down to [99, 103].
-  ASSERT_TRUE(book.window_base().has_value());
-  EXPECT_EQ(*book.window_base(), 99);
+  EXPECT_EQ(book.best_bid()->price, 101);
+  EXPECT_EQ(book.bid_levels(), 2u);
   ASSERT_TRUE(book.best_ask().has_value());
-  EXPECT_EQ(book.best_ask()->price, 99);
-  EXPECT_EQ(book.bid_levels(), 1u); // 106 falls outside; 102 remains.
-  EXPECT_EQ(book.ask_levels(), 2u); // 104 falls outside; 103 remains.
+  EXPECT_EQ(book.best_ask()->price, 102);
+  EXPECT_EQ(book.ask_levels(), 1u);
 }
 
-TEST(OffsetArrayBook, WholeWindowRecenterIsIgnoredAtPriceExtremes) {
+TEST(OffsetArrayBook, OutOfWindowUpdatesAreIgnoredAtPriceExtremes) {
   tickbook::OffsetArrayBook book(4);
   const auto low = std::numeric_limits<tickbook::Price>::min() + 1;
   const auto high = std::numeric_limits<tickbook::Price>::max() - 1;
@@ -112,7 +107,7 @@ TEST(OffsetArrayBook, EmptyWindowIgnoresUpdates) {
 }
 
 TEST(OffsetArrayBook, IndexesConfiguredPriceTicksAndRejectsMisalignedPrices) {
-  tickbook::OffsetArrayBook book(4, 10);
+  tickbook::OffsetArrayBook book(6, 10);
   book.apply(update(tickbook::Side::Bid, 100, 1));
   book.apply(update(tickbook::Side::Bid, 110, 2));
   book.apply(update(tickbook::Side::Bid, 105, 3));
@@ -126,7 +121,7 @@ TEST(OffsetArrayBook, IndexesConfiguredPriceTicksAndRejectsMisalignedPrices) {
   EXPECT_EQ(book.ask_levels(), 1u);
 }
 
-TEST(OffsetArrayBook, DefaultWindowIgnoresAWholeWindowPriceJumpWithoutClearingBook) {
+TEST(OffsetArrayBook, DefaultWindowIgnoresAFarPriceWithoutClearingBook) {
   tickbook::OffsetArrayBook book;
   book.apply(update(tickbook::Side::Bid, 10'000, 3));
   book.apply(update(tickbook::Side::Ask, 10'001, 4));
@@ -135,7 +130,7 @@ TEST(OffsetArrayBook, DefaultWindowIgnoresAWholeWindowPriceJumpWithoutClearingBo
   const auto previous_bid_levels = book.bid_levels();
   const auto previous_ask_levels = book.ask_levels();
 
-  book.apply(update(tickbook::Side::Ask, 1'000'000, 9));
+  book.apply(update(tickbook::Side::Ask, 100'000, 9));
 
   EXPECT_EQ(book.best_bid(), previous_bid);
   EXPECT_EQ(book.best_ask(), previous_ask);

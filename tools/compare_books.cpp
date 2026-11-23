@@ -31,9 +31,8 @@ struct TopK {
 };
 
 template <OrderBook Left, OrderBook Right>
-[[nodiscard]] bool same_book(const Left& left, const Right& right) noexcept {
+[[nodiscard]] bool same_top_k(const Left& left, const Right& right) noexcept {
   if (left.best_bid() != right.best_bid() || left.best_ask() != right.best_ask() ||
-      left.bid_levels() != right.bid_levels() || left.ask_levels() != right.ask_levels() ||
       left.crossed() != right.crossed()) {
     return false;
   }
@@ -107,7 +106,7 @@ int main(int argc, char** argv) {
     baseline.apply(event);
     flat.apply(event);
     offset.apply(event);
-    if (!same_book(baseline, flat) || !same_book(baseline, offset)) {
+    if (!same_top_k(baseline, flat) || !same_top_k(baseline, offset)) {
       std::cerr << "compare_books: mismatch after event " << event_count << '\n';
       return 1;
     }
@@ -117,7 +116,13 @@ int main(int argc, char** argv) {
   std::cout << "events=" << event_count << '\n'
             << "price_window_ticks=" << offset.window_size() << '\n'
             << "price_tick_fixed_point_units=" << price_tick << '\n'
+            << "bookmap_bid_levels=" << baseline.bid_levels() << '\n'
+            << "bookmap_ask_levels=" << baseline.ask_levels() << '\n'
+            << "flat_bid_levels=" << flat.bid_levels() << '\n'
+            << "flat_ask_levels=" << flat.ask_levels() << '\n'
+            << "offset_bid_levels=" << offset.bid_levels() << '\n'
+            << "offset_ask_levels=" << offset.ask_levels() << '\n'
             << "top_k_checked=" << kTopK << '\n'
-            << "differential_result=match\n";
+            << "differential_result=top_k_match\n";
   return 0;
 }

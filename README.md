@@ -8,16 +8,17 @@ Header-only core, GoogleTest tests, CI with ASan/UBSan/TSan on GCC and Clang.
 Milestones 1, 2.1–2.6, 2.8, 3.1–3.3, 4.2, 4.4, 5.1–5.3, 6.1–6.6, and 7.1–7.3 are implemented. Milestone 4.1 adds a Release-only
 per-event replay histogram; its Linux zero-minor-fault assertion still needs a Linux run. The
 milestone 4.3 five-run comparison is recorded below; its Linux `perf` flame graph remains pending.
-`compare_books` matched `BookMap`,
-`FlatBook`, and `OffsetArrayBook` after every event in the 2019-12-01 Binance BTCUSDT replay
-(6,907,104 events). Milestone 2.7 tooling is implemented: parser fuzz targets, CI gates, a
+`OffsetArrayBook` uses a fixed window centered on its first accepted price and ignores later
+out-of-window levels. The 2019-12-01 `compare_books` run matched the top five through event
+2,919,722, then diverged when the bounded window omitted a level retained by `BookMap`. Milestone
+2.7 tooling is implemented: parser fuzz targets, CI gates, a
 local gate script, and a pinned Ubuntu toolchain. AppleClang plain, ASan/UBSan, and TSan builds
-with warnings-as-errors each pass all 106 tests.
+with warnings-as-errors each pass all 112 tests.
 The milestone 6 utility sources pass targeted clang-tidy;
 the project-wide static script still reports existing warning-as-error findings in unrelated
 book, sequencing and converter code. All five 60-second parser and weights-loader fuzz smoke targets
 pass locally. The Ubuntu workflow jobs have not run here. After installing the training packages,
-the local Python suite passes all 9 tests, including C++/PyTorch parity. Three monthly sample days
+the local Python suite passes all 16 tests when the parity executable is built. Three monthly sample days
 now support one walk-forward test fold; its results are reported below and are not enough to claim
 a stable edge.
 
@@ -121,12 +122,15 @@ overhead, in nanoseconds. They are not trading latency.
 | --- | ---: | ---: | ---: | ---: |
 | `BookMap` | 28 (27–61) | 111 (111–231) | 155 (155–991) | 54,527 (11,069–3,124,728) |
 | `FlatBook` | 1,055 (1,055–1,087) | 2,111 (2,111–3,007) | 2,495 (2,175–16,383) | 5,262,236 (82,901–73,262,861) |
-| `OffsetArrayBook` | 28 (26–28) | 28 (28–109) | 111 (111–195) | 789,570 (753,527–1,832,942) |
+| `OffsetArrayBook` | 26 (25–27) | 28 (27–109) | 111 (111–195) | 624,777 (40,152–1,369,611) |
 
-All five OffsetArrayBook runs had zero measured hot-path allocations. All five FlatBook runs had
-zero; BookMap allocated 2,671,052 times per run. macOS reports process-scoped minor faults rather
-than asserting zero: run counts ranged 1–10 for BookMap, 1–24 for FlatBook, and 0–2 for
-OffsetArrayBook. The fanless M2 showed substantial max-latency and fault-count spread, so the
+The OffsetArrayBook row was rerun after changing to the fixed-window, ignore-out-of-window policy;
+the earlier row used circular recentering. Its median p50 moved from 28 to 26 ns, while p99 and
+p99.9 medians stayed at 28 and 111 ns. All five OffsetArrayBook runs had zero measured hot-path
+allocations. All five FlatBook runs had zero; BookMap allocated 2,671,052 times per run. macOS
+reports process-scoped minor faults rather than asserting zero: run counts ranged 1–10 for BookMap,
+1–24 for FlatBook, and 0–2 for OffsetArrayBook. The fanless M2 showed substantial max-latency and
+fault-count spread, so the
 percentile ranges are shown and the exact maxima are not used to set the budget. The Linux x86
 comparison and flame graph remain needed for the authoritative pinned-core profile.
 
@@ -393,17 +397,16 @@ ASan/UBSan and TSan builds.
 default. At capacity it drops the worst retained level when a better one arrives and ignores
 updates below its retained range. It reserves its vectors at construction. `OffsetArrayBook`
 uses a fixed window of 65,536 price ticks by default; pass the fixed-point tick size as the
-second constructor argument when it is greater than one. Its circular storage slides the
-window for partial shifts and drops levels that leave the window. An update requiring a shift
-of a full window or more is ignored so one far-away price cannot erase the retained book.
-Both optimized
-books avoid allocations during updates.
+second constructor argument when it is greater than one. It centers that fixed window on the
+first accepted level and ignores every later out-of-window level; it never moves the window or
+evicts retained levels because of a deep update. Both optimized books avoid allocations during
+updates.
 
 `compare_books` uses each bounded book's fixed default capacity and compares best levels,
-counts, crossed state, and top five levels after every event. An update outside the offset
-window is ignored by policy, so a mismatch reports that the input exceeded a bounded book's
-retained range. The binary header does not contain the exchange tick size, so pass it as an integer number of
-fixed-point price units when it is greater than one (the default is one):
+crossed state, and top five levels after every event. It prints each book's final depth counts;
+they may differ when a level falls outside a bounded book's retained range. The binary header
+does not contain the exchange tick size, so pass it as an integer number of fixed-point price
+units when it is greater than one (the default is one):
 
     build/compare_books /path/to/day.bin --price-tick 1
 

@@ -13,10 +13,9 @@ namespace tickbook {
 
 inline constexpr std::size_t kDefaultOffsetArrayWindowSize = 65'536;
 
-// Fixed price window indexed directly by integer price. When an update falls outside
-// the window, a partial shift drops levels shifted beyond the opposite edge. An update
-// requiring a shift of one full window or more is ignored, preserving all retained levels.
-// Capacity is fixed at construction; no update allocates.
+// Fixed price window indexed directly by integer price. The first accepted price centers
+// the window; all later out-of-window levels are ignored so a deep update cannot move the
+// window or evict retained levels. Capacity is fixed at construction; no update allocates.
 class OffsetArrayBook {
 public:
   explicit OffsetArrayBook(std::size_t window_size = kDefaultOffsetArrayWindowSize,
@@ -36,7 +35,6 @@ public:
     std::fill(bids_.begin(), bids_.end(), Qty{0});
     std::fill(asks_.begin(), asks_.end(), Qty{0});
     initialized_ = false;
-    origin_ = 0;
     bid_count_ = 0;
     ask_count_ = 0;
     best_bid_index_ = empty_index();
@@ -101,13 +99,7 @@ private:
   [[nodiscard]] std::size_t empty_index() const noexcept { return bids_.size(); }
 
   [[nodiscard]] std::size_t physical_index(std::size_t logical_index) const noexcept {
-    return physical_index(logical_index, origin_, bids_.size());
-  }
-
-  [[nodiscard]] static std::size_t physical_index(std::size_t logical_index, std::size_t origin,
-                                                  std::size_t window_size) noexcept {
-    const auto until_end = window_size - origin;
-    return logical_index < until_end ? origin + logical_index : logical_index - until_end;
+    return logical_index;
   }
 
   [[nodiscard]] static std::uint64_t distance(Price high, Price low) noexcept {
@@ -115,8 +107,15 @@ private:
   }
 
   [[nodiscard]] Price initial_base(Price price) const noexcept {
-    const auto highest_base = std::numeric_limits<Price>::max() - window_span_;
-    return price > highest_base ? price - window_span_ : price;
+    const auto half_ticks = bids_.size() / 2;
+    const auto half_span = static_cast<Price>(
+        static_cast<std::uint64_t>(half_ticks) * static_cast<std::uint64_t>(price_tick_));
+    const auto upper_padding = window_span_ - half_span;
+    const auto minimum = std::numeric_limits<Price>::min();
+    const auto maximum = std::numeric_limits<Price>::max();
+    if (price < minimum + half_span) return price;
+    if (price > maximum - upper_padding) return price - window_span_;
+    return price - half_span;
   }
 
   [[nodiscard]] bool offset(Price price, std::size_t& index) const noexcept {
@@ -136,91 +135,8 @@ private:
       base_price_ = initial_base(price);
       return true;
     }
-
-    if (price < base_price_) {
-      const auto delta = distance(base_price_, price) / static_cast<std::uint64_t>(price_tick_);
-      if (delta >= bids_.size()) return false;
-      shift_window_lower(static_cast<std::size_t>(delta));
-      base_price_ = price;
-      return true;
-    }
-
-    const auto price_offset =
-        distance(price, base_price_) / static_cast<std::uint64_t>(price_tick_);
-    if (price_offset < bids_.size()) return true;
-
-    const auto delta = price_offset - (bids_.size() - 1);
-    if (delta >= bids_.size()) return false;
-    shift_window_higher(static_cast<std::size_t>(delta));
-    base_price_ = price - window_span_;
-    return true;
-  }
-
-  void shift_window_lower(std::size_t delta) noexcept {
-    const auto size = bids_.size();
-    const auto next_origin = origin_ >= delta ? origin_ - delta : size - (delta - origin_);
-    clear_expired(bids_, bid_count_, next_origin, 0, delta);
-    clear_expired(asks_, ask_count_, next_origin, 0, delta);
-    origin_ = next_origin;
-    shift_best_after_lower(bids_, best_bid_index_, delta, true);
-    shift_best_after_lower(asks_, best_ask_index_, delta, false);
-  }
-
-  void shift_window_higher(std::size_t delta) noexcept {
-    const auto size = bids_.size();
-    const auto until_end = size - origin_;
-    const auto next_origin = delta >= until_end ? delta - until_end : origin_ + delta;
-    const auto first_expired = size - delta;
-    clear_expired(bids_, bid_count_, next_origin, first_expired, size);
-    clear_expired(asks_, ask_count_, next_origin, first_expired, size);
-    origin_ = next_origin;
-    shift_best_after_higher(bids_, best_bid_index_, delta, true);
-    shift_best_after_higher(asks_, best_ask_index_, delta, false);
-  }
-
-  void clear_expired(std::vector<Qty>& levels, std::size_t& count, std::size_t new_origin,
-                     std::size_t first, std::size_t last) noexcept {
-    for (std::size_t i = first; i < last; ++i) {
-      const auto slot = physical_index(i, new_origin, levels.size());
-      if (levels[slot] != 0) {
-        levels[slot] = 0;
-        --count;
-      }
-    }
-  }
-
-  void shift_best_after_lower(const std::vector<Qty>& levels, std::size_t& best_index,
-                              std::size_t delta, bool bids) const noexcept {
-    if (best_index == empty_index()) return;
-    if (best_index < levels.size() - delta) {
-      best_index += delta;
-      return;
-    }
-    best_index = find_best(levels, bids);
-  }
-
-  void shift_best_after_higher(const std::vector<Qty>& levels, std::size_t& best_index,
-                               std::size_t delta, bool bids) const noexcept {
-    if (best_index == empty_index()) return;
-    if (best_index >= delta) {
-      best_index -= delta;
-      return;
-    }
-    best_index = bids ? empty_index() : find_best(levels, false);
-  }
-
-  [[nodiscard]] std::size_t find_best(const std::vector<Qty>& levels, bool bids) const noexcept {
-    if (bids) {
-      for (std::size_t i = levels.size(); i > 0;) {
-        --i;
-        if (levels[physical_index(i)] != 0) return i;
-      }
-    } else {
-      for (std::size_t i = 0; i < levels.size(); ++i) {
-        if (levels[physical_index(i)] != 0) return i;
-      }
-    }
-    return empty_index();
+    std::size_t ignored_index = 0;
+    return offset(price, ignored_index);
   }
 
   void update(std::vector<Qty>& levels, std::size_t& count, std::size_t& best_index,
@@ -278,8 +194,6 @@ private:
   std::size_t ask_count_{};
   std::size_t best_bid_index_{};
   std::size_t best_ask_index_{};
-  // Rebase the logical price window by rotating its origin instead of moving all levels.
-  std::size_t origin_{};
   bool initialized_{};
   bool valid_{};
 };

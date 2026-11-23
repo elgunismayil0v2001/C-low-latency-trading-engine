@@ -110,7 +110,9 @@ Event next_event(RandomStream& random) {
 TEST(OrderBooks, RandomUpdatesMatchBookMapAfterEveryEvent) {
   BookMap baseline;
   FlatBook flat(512);
-  OffsetArrayBook offset(512);
+  // The random stream spans 401 ticks. Leave enough room around whichever first
+  // price seeds the fixed window so this test compares in-window updates exactly.
+  OffsetArrayBook offset(1'024);
   RandomStream random;
 
   constexpr std::size_t kEventCount = 10'000;
@@ -204,7 +206,7 @@ TEST(OrderBooks, FarAwayOffsetUpdateIsIgnoredAndTopFiveMatchesBookMap) {
     events[5 + level] =
         Event{0, 0, 0, 10'001 + static_cast<Price>(level), 1, EventType::SnapshotLevel, Side::Ask};
   }
-  events[10] = Event{1, 0, 0, 1'000'000, 2, EventType::BookUpdate, Side::Ask};
+  events[10] = Event{1, 0, 0, 100'000, 2, EventType::BookUpdate, Side::Ask};
 
   for (const auto& event : events) {
     baseline.apply(event);
@@ -212,5 +214,5 @@ TEST(OrderBooks, FarAwayOffsetUpdateIsIgnoredAndTopFiveMatchesBookMap) {
     EXPECT_TRUE(same_top_five(baseline, offset));
   }
   EXPECT_EQ(baseline.ask_levels(), 6U);
-  EXPECT_EQ(offset.ask_levels(), 5U); // The out-of-window sixth level is omitted.
+  EXPECT_EQ(offset.ask_levels(), 5U); // The far sixth level is outside the fixed window.
 }
