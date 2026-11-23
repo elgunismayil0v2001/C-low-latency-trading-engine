@@ -38,7 +38,6 @@ namespace {
 using namespace tickbook;
 
 constexpr std::size_t kRingCapacity = 1024;
-constexpr std::uint64_t kMaximumWindowTicks = 6'000'000;
 
 std::atomic<bool> allocation_tracking_enabled{};
 std::atomic<std::size_t> allocation_count{};
@@ -165,37 +164,6 @@ void usage(std::ostream& output) {
     error = nn::weights_load_error_message(load_error);
     return false;
   }
-  return true;
-}
-
-struct PriceRange {
-  Price minimum{std::numeric_limits<Price>::max()};
-  Price maximum{std::numeric_limits<Price>::min()};
-};
-
-[[nodiscard]] bool scan_price_range(BinaryReplay& source, Price price_tick, PriceRange& range,
-                                    std::size_t& window_size, std::string& error) {
-  while (const auto view = source.next()) {
-    if (view->type() == EventType::Trade || view->qty() < 0) continue;
-    if (view->price() % price_tick != 0) {
-      error = "event price is not aligned to --price-tick";
-      return false;
-    }
-    range.minimum = std::min(range.minimum, view->price());
-    range.maximum = std::max(range.maximum, view->price());
-  }
-
-  if (range.minimum <= range.maximum) {
-    const auto distance =
-        static_cast<std::uint64_t>(range.maximum) - static_cast<std::uint64_t>(range.minimum);
-    const auto ticks = distance / static_cast<std::uint64_t>(price_tick);
-    if (ticks >= kMaximumWindowTicks) {
-      error = "observed price span exceeds the 6000000-tick offset-book safety limit";
-      return false;
-    }
-    window_size = static_cast<std::size_t>(ticks + 1);
-  }
-  source.rewind();
   return true;
 }
 
@@ -532,13 +500,6 @@ int main(int argc, char** argv) try {
       return 1;
     }
   }
-  PriceRange range;
-  std::size_t window_size = 1;
-  if (!scan_price_range(source, price_tick, range, window_size, error)) {
-    std::cerr << "replay_latency: " << error << '\n';
-    return 1;
-  }
-
   bool success = false;
   switch (kind) {
   case BookKind::Map: {
@@ -554,7 +515,7 @@ int main(int argc, char** argv) try {
     break;
   }
   case BookKind::Offset: {
-    OffsetArrayBook book(window_size, price_tick);
+    OffsetArrayBook book(kDefaultOffsetArrayWindowSize, price_tick);
     success = measure_replay(source, book, book_name(kind), price_tick, enable_features,
                              model ? &*model : nullptr, error);
     break;

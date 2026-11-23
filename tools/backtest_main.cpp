@@ -178,34 +178,6 @@ void usage(std::ostream& output) {
   return result;
 }
 
-struct ScanResult {
-  std::uint64_t events{};
-  std::uint64_t messages{};
-  Price minimum_price{std::numeric_limits<Price>::max()};
-  Price maximum_price{};
-  std::uint64_t book_events{};
-};
-
-[[nodiscard]] bool scan_range(tickbook::BinaryReplay& replay, Price price_tick, ScanResult& scan,
-                              std::string& error) {
-  replay.rewind();
-  while (const auto view = replay.next()) {
-    ++scan.events;
-    if ((view->flags() & tickbook::kEventFlagEndOfMessage) != 0) ++scan.messages;
-    if (view->type() != tickbook::EventType::Trade) {
-      ++scan.book_events;
-      if (view->price() < 0 || view->price() % price_tick != 0) {
-        error = "negative or misaligned book price in replay file";
-        return false;
-      }
-      scan.minimum_price = std::min(scan.minimum_price, view->price());
-      scan.maximum_price = std::max(scan.maximum_price, view->price());
-    }
-  }
-  replay.rewind();
-  return true;
-}
-
 void print_latency(std::string_view name, const tickbook::sim::Metrics& metrics) {
   const auto& histogram = metrics.latency_histogram();
   std::cout << name << "_count=" << histogram.count() << '\n';
@@ -249,15 +221,6 @@ int main(int argc, char** argv) try {
     std::cerr << "backtest: invalid --price-tick\n";
     return 2;
   }
-  ScanResult scan{};
-  if (!scan_range(replay, price_tick, scan, error)) {
-    std::cerr << "backtest: " << error << '\n';
-    return 1;
-  }
-  if (scan.book_events == 0) {
-    std::cerr << "backtest: replay has no book events\n";
-    return 1;
-  }
   Qty order_size = 0;
   Qty max_position = 0;
   std::int64_t threshold_q20 = 0;
@@ -284,14 +247,7 @@ int main(int argc, char** argv) try {
     }
   }
 
-  const auto price_span = static_cast<std::uint64_t>(scan.maximum_price) -
-                          static_cast<std::uint64_t>(scan.minimum_price);
-  const auto tick_count = price_span / static_cast<std::uint64_t>(price_tick) + 1U;
-  if (tick_count > std::numeric_limits<std::size_t>::max()) {
-    std::cerr << "backtest: observed price range is too large\n";
-    return 1;
-  }
-  tickbook::OffsetArrayBook book(static_cast<std::size_t>(tick_count), price_tick);
+  tickbook::OffsetArrayBook book(tickbook::kDefaultOffsetArrayWindowSize, price_tick);
   if (book.window_size() == 0) {
     std::cerr << "backtest: cannot allocate a book window for this price range\n";
     return 1;
@@ -318,14 +274,28 @@ int main(int argc, char** argv) try {
           : static_cast<tickbook::sim::IStrategy&>(threshold_strategy);
 
   const auto overhead_ns = timer_overhead_ns();
+  std::uint64_t message_count = 0;
+  bool saw_book_event = false;
+  bool invalid_book_price = false;
   const auto run = [&](bool measure) noexcept -> bool {
     book.clear();
     features.reset();
     exchange.reset();
+    message_count = 0;
+    saw_book_event = false;
+    invalid_book_price = false;
     replay.rewind();
     while (const auto view = replay.next()) {
       const auto start = measure ? Clock::now() : Clock::time_point{};
       const auto event = view->copy();
+      if ((event.flags & tickbook::kEventFlagEndOfMessage) != 0) ++message_count;
+      if (event.type != tickbook::EventType::Trade) {
+        saw_book_event = true;
+        if (event.price < 0 || event.price % price_tick != 0) {
+          invalid_book_price = true;
+          return false;
+        }
+      }
       if ((event.flags & tickbook::kEventFlagSnapshotStart) != 0) book.clear();
       book.apply(event);
       const auto update = features.on_event(event, book);
@@ -366,15 +336,21 @@ int main(int argc, char** argv) try {
     }
     exchange.cancel_pending();
     exchange.mark_to_market(book);
-    return true;
+    return saw_book_event;
   };
 
   if (!run(false)) {
-    std::cerr << "backtest: replay failed during warm-up" << '\n';
+    std::cerr << "backtest: "
+              << (invalid_book_price ? "negative or misaligned book price in replay file"
+                                     : "replay has no book events or warm-up failed")
+              << '\n';
     return 1;
   }
   if (!run(true)) {
-    std::cerr << "backtest: replay failed during measured pass" << '\n';
+    std::cerr << "backtest: "
+              << (invalid_book_price ? "negative or misaligned book price in replay file"
+                                     : "replay has no book events or measured pass failed")
+              << '\n';
     return 1;
   }
 
@@ -385,8 +361,8 @@ int main(int argc, char** argv) try {
     std::cout << character;
   }
   std::cout << '\n'
-            << "events=" << scan.events << '\n'
-            << "messages=" << scan.messages << '\n'
+            << "events=" << replay.event_count() << '\n'
+            << "messages=" << message_count << '\n'
             << "price_scale=" << replay.price_scale() << '\n'
             << "qty_scale=" << replay.qty_scale() << '\n'
             << "strategy=" << (options.strategy == StrategyChoice::Nn ? "nn" : "threshold") << '\n'

@@ -73,21 +73,21 @@ TEST(OffsetArrayBook, SlidesWindowInBothDirectionsAndRetainsOverlappingLevels) {
   EXPECT_EQ(book.ask_levels(), 2u); // 104 falls outside; 103 remains.
 }
 
-TEST(OffsetArrayBook, LargeRecenterResetsOldWindowAndHandlesPriceExtremes) {
+TEST(OffsetArrayBook, WholeWindowRecenterIsIgnoredAtPriceExtremes) {
   tickbook::OffsetArrayBook book(4);
   const auto low = std::numeric_limits<tickbook::Price>::min() + 1;
   const auto high = std::numeric_limits<tickbook::Price>::max() - 1;
   book.apply(update(tickbook::Side::Bid, low, 1));
   book.apply(update(tickbook::Side::Ask, high, 2));
-  EXPECT_EQ(book.bid_levels(), 0u);
-  ASSERT_TRUE(book.best_ask().has_value());
-  EXPECT_EQ(book.best_ask()->price, high);
-  EXPECT_EQ(book.ask_levels(), 1u);
+  ASSERT_TRUE(book.best_bid().has_value());
+  EXPECT_EQ(book.best_bid()->price, low);
+  EXPECT_EQ(book.bid_levels(), 1u);
+  EXPECT_FALSE(book.best_ask().has_value());
+  EXPECT_EQ(book.ask_levels(), 0u);
 
   book.apply(update(tickbook::Side::Bid, high, 3));
-  ASSERT_TRUE(book.best_bid().has_value());
-  EXPECT_EQ(book.best_bid()->price, high);
-  EXPECT_TRUE(book.crossed());
+  EXPECT_EQ(book.best_bid()->price, low);
+  EXPECT_FALSE(book.crossed());
 }
 
 TEST(OffsetArrayBook, IgnoresInvalidEventsAndClearResetsTheWindow) {
@@ -124,4 +124,21 @@ TEST(OffsetArrayBook, IndexesConfiguredPriceTicksAndRejectsMisalignedPrices) {
   ASSERT_TRUE(book.best_ask().has_value());
   EXPECT_EQ(book.best_ask()->price, 120);
   EXPECT_EQ(book.ask_levels(), 1u);
+}
+
+TEST(OffsetArrayBook, DefaultWindowIgnoresAWholeWindowPriceJumpWithoutClearingBook) {
+  tickbook::OffsetArrayBook book;
+  book.apply(update(tickbook::Side::Bid, 10'000, 3));
+  book.apply(update(tickbook::Side::Ask, 10'001, 4));
+  const auto previous_bid = book.best_bid();
+  const auto previous_ask = book.best_ask();
+  const auto previous_bid_levels = book.bid_levels();
+  const auto previous_ask_levels = book.ask_levels();
+
+  book.apply(update(tickbook::Side::Ask, 1'000'000, 9));
+
+  EXPECT_EQ(book.best_bid(), previous_bid);
+  EXPECT_EQ(book.best_ask(), previous_ask);
+  EXPECT_EQ(book.bid_levels(), previous_bid_levels);
+  EXPECT_EQ(book.ask_levels(), previous_ask_levels);
 }

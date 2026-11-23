@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -20,8 +19,6 @@ namespace {
 using namespace tickbook;
 
 constexpr std::size_t kTopK = 5;
-constexpr std::uint64_t kMaximumWindow = 6'000'000;
-
 struct TopK {
   std::array<Level, kTopK> levels{};
   std::size_t count{};
@@ -91,35 +88,9 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  Price minimum_price = std::numeric_limits<Price>::max();
-  Price maximum_price = std::numeric_limits<Price>::min();
-  while (const auto event_view = replay.next()) {
-    if (event_view->type() == EventType::Trade || event_view->qty() < 0) continue;
-    if (event_view->price() % price_tick != 0) {
-      std::cerr << "compare_books: event price is not aligned to --price-tick\n";
-      return 1;
-    }
-    minimum_price = std::min(minimum_price, event_view->price());
-    maximum_price = std::max(maximum_price, event_view->price());
-  }
-
-  std::uint64_t window_size = 1;
-  if (minimum_price <= maximum_price) {
-    const auto distance =
-        static_cast<std::uint64_t>(maximum_price) - static_cast<std::uint64_t>(minimum_price);
-    const auto ticks = distance / static_cast<std::uint64_t>(price_tick);
-    if (ticks >= kMaximumWindow) {
-      std::cerr << "compare_books: observed price span exceeds the 6000000-tick safety limit\n";
-      return 1;
-    }
-    window_size = ticks + 1;
-  }
-
-  const auto capacity = static_cast<std::size_t>(window_size);
   BookMap baseline;
-  FlatBook flat(capacity);
-  OffsetArrayBook offset(capacity, price_tick);
-  replay.rewind();
+  FlatBook flat;
+  OffsetArrayBook offset(kDefaultOffsetArrayWindowSize, price_tick);
 
   std::uint64_t event_count = 0;
   while (const auto event_view = replay.next()) {
@@ -128,6 +99,10 @@ int main(int argc, char** argv) {
       baseline.clear();
       flat.clear();
       offset.clear();
+    }
+    if (event.type != EventType::Trade && event.qty >= 0 && event.price % price_tick != 0) {
+      std::cerr << "compare_books: event price is not aligned to --price-tick\n";
+      return 1;
     }
     baseline.apply(event);
     flat.apply(event);
@@ -140,7 +115,7 @@ int main(int argc, char** argv) {
   }
 
   std::cout << "events=" << event_count << '\n'
-            << "price_window_ticks=" << window_size << '\n'
+            << "price_window_ticks=" << offset.window_size() << '\n'
             << "price_tick_fixed_point_units=" << price_tick << '\n'
             << "top_k_checked=" << kTopK << '\n'
             << "differential_result=match\n";

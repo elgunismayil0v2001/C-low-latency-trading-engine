@@ -19,6 +19,17 @@ static_assert(OrderBook<BookMap>);
 static_assert(OrderBook<FlatBook>);
 static_assert(OrderBook<OffsetArrayBook>);
 
+struct TopK {
+  std::array<Level, 5> levels{};
+  std::size_t count{};
+
+  [[nodiscard]] bool operator()(Price price, Qty qty) noexcept {
+    if (count == levels.size()) return false;
+    levels[count++] = Level{price, qty};
+    return count < levels.size();
+  }
+};
+
 struct RandomStream {
   std::uint64_t state{0x6a09e667f3bcc909ULL};
 
@@ -58,6 +69,27 @@ template <OrderBook Left, OrderBook Right> bool same_book(const Left& left, cons
     }
   }
   return true;
+}
+
+template <OrderBook Left, OrderBook Right>
+bool same_top_five(const Left& left, const Right& right) {
+  if (left.best_bid() != right.best_bid() || left.best_ask() != right.best_ask() ||
+      left.crossed() != right.crossed()) {
+    return false;
+  }
+  TopK left_bids;
+  TopK right_bids;
+  TopK left_asks;
+  TopK right_asks;
+  left.visit_bids([&](Price price, Qty qty) noexcept { return left_bids(price, qty); });
+  right.visit_bids([&](Price price, Qty qty) noexcept { return right_bids(price, qty); });
+  left.visit_asks([&](Price price, Qty qty) noexcept { return left_asks(price, qty); });
+  right.visit_asks([&](Price price, Qty qty) noexcept { return right_asks(price, qty); });
+  return left_bids.count == right_bids.count && left_asks.count == right_asks.count &&
+         std::equal(left_bids.levels.begin(), left_bids.levels.begin() + left_bids.count,
+                    right_bids.levels.begin()) &&
+         std::equal(left_asks.levels.begin(), left_asks.levels.begin() + left_asks.count,
+                    right_asks.levels.begin());
 }
 
 Event next_event(RandomStream& random) {
@@ -160,4 +192,25 @@ TEST(OrderBooks, VisitorsCanStopAfterTheRequestedTopLevels) {
   EXPECT_EQ(count_one_ask(baseline), 1U);
   EXPECT_EQ(count_one_ask(flat), 1U);
   EXPECT_EQ(count_one_ask(offset), 1U);
+}
+
+TEST(OrderBooks, FarAwayOffsetUpdateIsIgnoredAndTopFiveMatchesBookMap) {
+  BookMap baseline;
+  OffsetArrayBook offset;
+  std::array<Event, 11> events{};
+  for (std::size_t level = 0; level < 5; ++level) {
+    events[level] =
+        Event{0, 0, 0, 10'000 - static_cast<Price>(level), 1, EventType::SnapshotLevel, Side::Bid};
+    events[5 + level] =
+        Event{0, 0, 0, 10'001 + static_cast<Price>(level), 1, EventType::SnapshotLevel, Side::Ask};
+  }
+  events[10] = Event{1, 0, 0, 1'000'000, 2, EventType::BookUpdate, Side::Ask};
+
+  for (const auto& event : events) {
+    baseline.apply(event);
+    offset.apply(event);
+    EXPECT_TRUE(same_top_five(baseline, offset));
+  }
+  EXPECT_EQ(baseline.ask_levels(), 6U);
+  EXPECT_EQ(offset.ask_levels(), 5U); // The out-of-window sixth level is omitted.
 }

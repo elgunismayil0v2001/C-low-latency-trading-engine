@@ -11,12 +11,16 @@
 
 namespace tickbook {
 
+inline constexpr std::size_t kDefaultOffsetArrayWindowSize = 65'536;
+
 // Fixed price window indexed directly by integer price. When an update falls outside
-// the window, the window slides just far enough to include it and drops levels shifted
-// beyond the opposite edge. Capacity is fixed at construction; no update allocates.
+// the window, a partial shift drops levels shifted beyond the opposite edge. An update
+// requiring a shift of one full window or more is ignored, preserving all retained levels.
+// Capacity is fixed at construction; no update allocates.
 class OffsetArrayBook {
 public:
-  explicit OffsetArrayBook(std::size_t window_size = 65'536, Price price_tick = 1)
+  explicit OffsetArrayBook(std::size_t window_size = kDefaultOffsetArrayWindowSize,
+                           Price price_tick = 1)
       : bids_(window_size, 0), asks_(window_size, 0), price_tick_(price_tick),
         best_bid_index_(window_size), best_ask_index_(window_size) {
     if (price_tick_ <= 0) return;
@@ -44,7 +48,7 @@ public:
         event.price % price_tick_ != 0) {
       return;
     }
-    ensure_window(event.price);
+    if (!ensure_window(event.price)) return;
     std::size_t index = 0;
     if (!offset(event.price, index)) return;
     if (event.side == Side::Bid) update(bids_, bid_count_, best_bid_index_, index, event.qty, true);
@@ -126,32 +130,30 @@ private:
     return true;
   }
 
-  void ensure_window(Price price) noexcept {
+  [[nodiscard]] bool ensure_window(Price price) noexcept {
     if (!initialized_) {
       initialized_ = true;
       base_price_ = initial_base(price);
-      return;
+      return true;
     }
 
     if (price < base_price_) {
       const auto delta = distance(base_price_, price) / static_cast<std::uint64_t>(price_tick_);
-      if (delta >= bids_.size()) {
-        reset_levels();
-      } else {
-        shift_window_lower(static_cast<std::size_t>(delta));
-      }
+      if (delta >= bids_.size()) return false;
+      shift_window_lower(static_cast<std::size_t>(delta));
       base_price_ = price;
-      return;
+      return true;
     }
 
     const auto price_offset =
         distance(price, base_price_) / static_cast<std::uint64_t>(price_tick_);
-    if (price_offset < bids_.size()) return;
+    if (price_offset < bids_.size()) return true;
 
     const auto delta = price_offset - (bids_.size() - 1);
-    if (delta >= bids_.size()) reset_levels();
-    else shift_window_higher(static_cast<std::size_t>(delta));
+    if (delta >= bids_.size()) return false;
+    shift_window_higher(static_cast<std::size_t>(delta));
     base_price_ = price - window_span_;
+    return true;
   }
 
   void shift_window_lower(std::size_t delta) noexcept {
@@ -219,16 +221,6 @@ private:
       }
     }
     return empty_index();
-  }
-
-  void reset_levels() noexcept {
-    std::fill(bids_.begin(), bids_.end(), Qty{0});
-    std::fill(asks_.begin(), asks_.end(), Qty{0});
-    bid_count_ = 0;
-    ask_count_ = 0;
-    origin_ = 0;
-    best_bid_index_ = empty_index();
-    best_ask_index_ = empty_index();
   }
 
   void update(std::vector<Qty>& levels, std::size_t& count, std::size_t& best_index,

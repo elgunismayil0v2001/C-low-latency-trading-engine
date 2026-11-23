@@ -379,7 +379,7 @@ There is no Linux pinned-core run yet. With all other code held at the final ver
 threshold replay p99 fell from 959 ns without the checked fast path to 407 ns with it, with
 identical fills and P&L; the five-run fast-path median p99 was 367 ns. The slow wide division
 remains for values whose product overflows 64 bits. A temporary harness checked the wide arithmetic
-against 100,000 deterministic random products. The 106-test GoogleTest suite passed in plain,
+against 100,000 deterministic random products. The 110-test GoogleTest suite passed in plain,
 ASan/UBSan and TSan builds.
 
 ## Order book layouts
@@ -389,17 +389,18 @@ default. At capacity it drops the worst retained level when a better one arrives
 updates below its retained range. It reserves its vectors at construction. `OffsetArrayBook`
 uses a fixed window of 65,536 price ticks by default; pass the fixed-point tick size as the
 second constructor argument when it is greater than one. Its circular storage slides the
-window to include out-of-range updates and drops levels that leave the window. Both optimized
+window for partial shifts and drops levels that leave the window. An update requiring a shift
+of a full window or more is ignored so one far-away price cannot erase the retained book.
+Both optimized
 books avoid allocations during updates.
 
-`compare_books` pre-scans a binary file to size both bounded books for the observed price
-range, then compares best levels, counts, crossed state, and top five levels after every event.
-The binary header does not contain the exchange tick size, so pass it as an integer number of
+`compare_books` uses each bounded book's fixed default capacity and compares best levels,
+counts, crossed state, and top five levels after every event. An update outside the offset
+window is ignored by policy, so a mismatch reports that the input exceeded a bounded book's
+retained range. The binary header does not contain the exchange tick size, so pass it as an integer number of
 fixed-point price units when it is greater than one (the default is one):
 
     build/compare_books /path/to/day.bin --price-tick 1
-
-The validator rejects files whose price span exceeds six million ticks.
 
 On the final BookMap state from BTCUSDT 2019-12-01 (3,415 bid levels, 3,783 ask levels),
 the old full traversal averaged 51,832 ns per bid+ask top-five query (run range 46,388–53,535 ns);
