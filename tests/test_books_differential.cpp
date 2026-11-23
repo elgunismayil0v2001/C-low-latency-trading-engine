@@ -111,8 +111,8 @@ TEST(OrderBooks, RandomUpdatesMatchBookMapAfterEveryEvent) {
   BookMap baseline;
   FlatBook flat(512);
   // The random stream spans 401 ticks. Leave enough room around whichever first
-  // price seeds the fixed window so this test compares in-window updates exactly.
-  OffsetArrayBook offset(1'024);
+  // price seeds the window so this remains an exact full-depth differential test.
+  OffsetArrayBook offset(2'048);
   RandomStream random;
 
   constexpr std::size_t kEventCount = 10'000;
@@ -215,4 +215,58 @@ TEST(OrderBooks, FarAwayOffsetUpdateIsIgnoredAndTopFiveMatchesBookMap) {
   }
   EXPECT_EQ(baseline.ask_levels(), 6U);
   EXPECT_EQ(offset.ask_levels(), 5U); // The far sixth level is outside the fixed window.
+}
+
+TEST(OrderBooks, OffsetArrayRecentersDuringNineHundredTickDrifts) {
+  constexpr std::size_t kWindowTicks = 1'000;
+  constexpr Price kStartPrice = 50'000;
+  constexpr Price kDriftTicks = 900;
+
+  for (const Price direction : {Price{1}, Price{-1}}) {
+    BookMap baseline;
+    OffsetArrayBook offset(kWindowTicks);
+    const auto apply_and_compare = [&](const Event& event) {
+      baseline.apply(event);
+      offset.apply(event);
+      EXPECT_TRUE(same_top_five(baseline, offset));
+    };
+
+    for (Price depth = 1; depth <= 10; ++depth) {
+      apply_and_compare(
+          Event{0, 0, 0, kStartPrice - depth, 1, EventType::SnapshotLevel, Side::Bid});
+      apply_and_compare(
+          Event{0, 0, 0, kStartPrice + depth, 1, EventType::SnapshotLevel, Side::Ask});
+    }
+    const auto initial_base = offset.window_base();
+
+    for (Price step = 1; step <= kDriftTicks; ++step) {
+      if (direction > 0) {
+        apply_and_compare(
+            Event{step, 0, 0, kStartPrice + step - 1, 1, EventType::BookUpdate, Side::Bid});
+        apply_and_compare(
+            Event{step, 0, 0, kStartPrice + step - 11, 0, EventType::BookUpdate, Side::Bid});
+        apply_and_compare(
+            Event{step, 0, 0, kStartPrice + step, 0, EventType::BookUpdate, Side::Ask});
+        apply_and_compare(
+            Event{step, 0, 0, kStartPrice + step + 10, 1, EventType::BookUpdate, Side::Ask});
+      } else {
+        apply_and_compare(
+            Event{step, 0, 0, kStartPrice - step, 0, EventType::BookUpdate, Side::Bid});
+        apply_and_compare(
+            Event{step, 0, 0, kStartPrice - step - 10, 1, EventType::BookUpdate, Side::Bid});
+        apply_and_compare(
+            Event{step, 0, 0, kStartPrice - step + 1, 1, EventType::BookUpdate, Side::Ask});
+        apply_and_compare(
+            Event{step, 0, 0, kStartPrice - step + 11, 0, EventType::BookUpdate, Side::Ask});
+      }
+    }
+
+    EXPECT_NE(offset.window_base(), initial_base);
+    ASSERT_TRUE(baseline.best_bid().has_value());
+    ASSERT_TRUE(offset.best_bid().has_value());
+    EXPECT_EQ(offset.best_bid()->price, baseline.best_bid()->price);
+    ASSERT_TRUE(baseline.best_ask().has_value());
+    ASSERT_TRUE(offset.best_ask().has_value());
+    EXPECT_EQ(offset.best_ask()->price, baseline.best_ask()->price);
+  }
 }

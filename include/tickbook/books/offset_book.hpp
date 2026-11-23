@@ -14,8 +14,9 @@ namespace tickbook {
 inline constexpr std::size_t kDefaultOffsetArrayWindowSize = 65'536;
 
 // Fixed price window indexed directly by integer price. The first accepted price centers
-// the window; all later out-of-window levels are ignored so a deep update cannot move the
-// window or evict retained levels. Capacity is fixed at construction; no update allocates.
+// the window; it shifts by half a window when the best level approaches an edge. Capacity is
+// fixed at construction; recentering keeps the overlap and drops only levels outside the new
+// window. A distant update alone cannot move the window, and updates never allocate.
 class OffsetArrayBook {
 public:
   explicit OffsetArrayBook(std::size_t window_size = kDefaultOffsetArrayWindowSize,
@@ -46,11 +47,17 @@ public:
         event.price % price_tick_ != 0) {
       return;
     }
-    if (!ensure_window(event.price)) return;
+    if (!initialized_) {
+      initialized_ = true;
+      base_price_ = initial_base(event.price);
+    }
     std::size_t index = 0;
-    if (!offset(event.price, index)) return;
+    if (!offset(event.price, index)) {
+      if (!recenter_for_edge() || !offset(event.price, index)) return;
+    }
     if (event.side == Side::Bid) update(bids_, bid_count_, best_bid_index_, index, event.qty, true);
     else update(asks_, ask_count_, best_ask_index_, index, event.qty, false);
+    static_cast<void>(recenter_for_edge());
   }
 
   [[nodiscard]] std::optional<Level> best_bid() const noexcept {
@@ -108,8 +115,8 @@ private:
 
   [[nodiscard]] Price initial_base(Price price) const noexcept {
     const auto half_ticks = bids_.size() / 2;
-    const auto half_span = static_cast<Price>(
-        static_cast<std::uint64_t>(half_ticks) * static_cast<std::uint64_t>(price_tick_));
+    const auto half_span = static_cast<Price>(static_cast<std::uint64_t>(half_ticks) *
+                                              static_cast<std::uint64_t>(price_tick_));
     const auto upper_padding = window_span_ - half_span;
     const auto minimum = std::numeric_limits<Price>::min();
     const auto maximum = std::numeric_limits<Price>::max();
@@ -129,14 +136,74 @@ private:
     return true;
   }
 
-  [[nodiscard]] bool ensure_window(Price price) noexcept {
-    if (!initialized_) {
-      initialized_ = true;
-      base_price_ = initial_base(price);
-      return true;
+  [[nodiscard]] bool recenter_for_edge() noexcept {
+    if (!initialized_ || bids_.size() < 2) return false;
+    const auto edge_margin = std::max<std::size_t>(1, bids_.size() / 4);
+    const auto upper_edge = bids_.size() - edge_margin;
+    const bool near_upper_edge = best_bid_index_ != empty_index() && best_bid_index_ >= upper_edge;
+    const bool near_lower_edge = best_ask_index_ != empty_index() && best_ask_index_ < edge_margin;
+    if (!near_upper_edge && !near_lower_edge) return false;
+
+    const auto requested_shift = bids_.size() / 2;
+    if (requested_shift == 0) return false;
+    if (near_upper_edge && near_lower_edge) {
+      const auto upper_pressure = best_bid_index_ - upper_edge;
+      const auto lower_pressure = edge_margin - 1 - best_ask_index_;
+      return shift_window(upper_pressure >= lower_pressure, requested_shift);
     }
-    std::size_t ignored_index = 0;
-    return offset(price, ignored_index);
+    return shift_window(near_upper_edge, requested_shift);
+  }
+
+  [[nodiscard]] bool shift_window(bool upward, std::size_t requested_ticks) noexcept {
+    const auto minimum = std::numeric_limits<Price>::min();
+    const auto maximum = std::numeric_limits<Price>::max();
+    const auto available_span =
+        upward ? distance(maximum, base_price_) : distance(base_price_, minimum);
+    const auto available_ticks = available_span / static_cast<std::uint64_t>(price_tick_);
+    const auto shift_ticks =
+        static_cast<std::size_t>(std::min<std::uint64_t>(requested_ticks, available_ticks));
+    if (shift_ticks == 0) return false;
+
+    const auto shift_span = static_cast<Price>(static_cast<std::uint64_t>(shift_ticks) *
+                                               static_cast<std::uint64_t>(price_tick_));
+    if (upward) {
+      const auto kept_size = bids_.size() - shift_ticks;
+      for (std::size_t index = 0; index < kept_size; ++index) {
+        bids_[index] = bids_[index + shift_ticks];
+        asks_[index] = asks_[index + shift_ticks];
+      }
+      std::fill(bids_.begin() + static_cast<std::ptrdiff_t>(kept_size), bids_.end(), Qty{0});
+      std::fill(asks_.begin() + static_cast<std::ptrdiff_t>(kept_size), asks_.end(), Qty{0});
+      base_price_ += shift_span;
+    } else {
+      const auto kept_size = bids_.size() - shift_ticks;
+      for (std::size_t index = kept_size; index > 0; --index) {
+        bids_[index - 1 + shift_ticks] = bids_[index - 1];
+        asks_[index - 1 + shift_ticks] = asks_[index - 1];
+      }
+      std::fill(bids_.begin(), bids_.begin() + static_cast<std::ptrdiff_t>(shift_ticks), Qty{0});
+      std::fill(asks_.begin(), asks_.begin() + static_cast<std::ptrdiff_t>(shift_ticks), Qty{0});
+      base_price_ -= shift_span;
+    }
+    recalculate_indexes();
+    return true;
+  }
+
+  void recalculate_indexes() noexcept {
+    bid_count_ = 0;
+    ask_count_ = 0;
+    best_bid_index_ = empty_index();
+    best_ask_index_ = empty_index();
+    for (std::size_t index = 0; index < bids_.size(); ++index) {
+      if (bids_[index] != 0) {
+        ++bid_count_;
+        best_bid_index_ = index;
+      }
+      if (asks_[index] != 0) {
+        ++ask_count_;
+        if (best_ask_index_ == empty_index()) best_ask_index_ = index;
+      }
+    }
   }
 
   void update(std::vector<Qty>& levels, std::size_t& count, std::size_t& best_index,

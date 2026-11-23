@@ -49,22 +49,21 @@ TEST(OffsetArrayBook, TracksBestLevelsAndRemovesTheBestWithoutScanningOnEveryUpd
   EXPECT_EQ(asks, (std::vector<tickbook::Price>{105}));
 }
 
-TEST(OffsetArrayBook, IgnoresOutOfWindowPricesWithoutMovingTheFixedWindow) {
-  tickbook::OffsetArrayBook book(5);
+TEST(OffsetArrayBook, IgnoresAFarUpdateWhenTheBestLevelsAreAwayFromTheEdges) {
+  tickbook::OffsetArrayBook book(16);
   book.apply(update(tickbook::Side::Bid, 100, 1));
-  book.apply(update(tickbook::Side::Bid, 101, 2));
-  book.apply(update(tickbook::Side::Ask, 102, 3));
+  book.apply(update(tickbook::Side::Ask, 101, 2));
   const auto base = book.window_base();
 
-  book.apply(update(tickbook::Side::Ask, 104, 5));
-  book.apply(update(tickbook::Side::Bid, 96, 6));
+  book.apply(update(tickbook::Side::Ask, 1'000, 5));
+  book.apply(update(tickbook::Side::Bid, -1'000, 6));
   ASSERT_TRUE(book.window_base().has_value());
   EXPECT_EQ(book.window_base(), base);
   ASSERT_TRUE(book.best_bid().has_value());
-  EXPECT_EQ(book.best_bid()->price, 101);
-  EXPECT_EQ(book.bid_levels(), 2u);
+  EXPECT_EQ(book.best_bid()->price, 100);
+  EXPECT_EQ(book.bid_levels(), 1u);
   ASSERT_TRUE(book.best_ask().has_value());
-  EXPECT_EQ(book.best_ask()->price, 102);
+  EXPECT_EQ(book.best_ask()->price, 101);
   EXPECT_EQ(book.ask_levels(), 1u);
 }
 
@@ -136,4 +135,26 @@ TEST(OffsetArrayBook, DefaultWindowIgnoresAFarPriceWithoutClearingBook) {
   EXPECT_EQ(book.best_ask(), previous_ask);
   EXPECT_EQ(book.bid_levels(), previous_bid_levels);
   EXPECT_EQ(book.ask_levels(), previous_ask_levels);
+}
+
+TEST(OffsetArrayBook, RecenteringKeepsEveryLevelInsideTheShiftedWindow) {
+  tickbook::OffsetArrayBook book(16);
+  book.apply(update(tickbook::Side::Bid, 100, 1));
+  book.apply(update(tickbook::Side::Bid, 97, 3));
+  book.apply(update(tickbook::Side::Bid, 101, 5));
+  book.apply(update(tickbook::Side::Ask, 102, 4));
+
+  book.apply(update(tickbook::Side::Bid, 104, 6));
+
+  EXPECT_EQ(book.window_base(), std::optional<tickbook::Price>{100});
+  EXPECT_EQ(book.bid_levels(), 3u);
+  EXPECT_EQ(book.ask_levels(), 1u);
+  std::vector<tickbook::Level> bids;
+  std::vector<tickbook::Level> asks;
+  book.visit_bids(
+      [&bids](tickbook::Price price, tickbook::Qty qty) { bids.push_back({price, qty}); });
+  book.visit_asks(
+      [&asks](tickbook::Price price, tickbook::Qty qty) { asks.push_back({price, qty}); });
+  EXPECT_EQ(bids, (std::vector<tickbook::Level>{{104, 6}, {101, 5}, {100, 1}}));
+  EXPECT_EQ(asks, (std::vector<tickbook::Level>{{102, 4}}));
 }
