@@ -13,7 +13,13 @@ from tickbook_data import (
     read_label_dump,
     walk_forward_folds,
 )
-from train import train
+from train import (
+    _block_bootstrap_confidence_interval,
+    _dead_zone_basis_points,
+    _shuffled_batches,
+    _validate_break_even_dead_zone,
+    train,
+)
 
 
 def write_label_dump(path, timestamps, labels, symbol=b"BTCUSDT"):
@@ -83,6 +89,24 @@ def test_training_rejects_one_day_before_importing_torch(tmp_path):
         train([str(path)], "direction", str(tmp_path / "out"), str(config))
 
 
+def test_training_rejects_one_tick_dead_zone_far_below_break_even(tmp_path):
+    timestamps = [100, DAY_NS + 100, 2 * DAY_NS + 100]
+    path = tmp_path / "one-tick.tfl"
+    write_label_dump(path, timestamps, [0, 1, 2])
+    config = Path(__file__).resolve().parents[1] / "config.json"
+
+    with pytest.raises(ValueError, match="not near the configured break-even move"):
+        train(
+            [str(path)],
+            "direction",
+            str(tmp_path / "out"),
+            str(config),
+            price_tick="0.01",
+            reference_price="7400",
+            break_even_move_bps=20.0,
+        )
+
+
 def test_walk_forward_purges_against_midnight_even_if_first_test_row_is_later():
     timestamps = np.array(
         [100, DAY_NS + 100, 2 * DAY_NS - 5_000_000_000, 2 * DAY_NS + 20_000_000_000],
@@ -104,3 +128,52 @@ def test_label_dump_rejects_count_mismatch_and_invalid_direction_class(tmp_path)
     write_label_dump(path, [100], [8])
     with pytest.raises(ValueError, match="direction labels"):
         read_label_dump(path)
+
+
+def test_minibatches_shuffle_only_the_supplied_training_rows_deterministically():
+    first = list(_shuffled_batches(12, batch_size=4, seed=42))
+    second = list(_shuffled_batches(12, batch_size=4, seed=42))
+    order = np.concatenate(first)
+
+    assert np.array_equal(order, np.concatenate(second))
+    assert sorted(order.tolist()) == list(range(12))
+    assert not np.array_equal(order, np.arange(12))
+    assert all(0 <= index < 12 for batch in first for index in batch)
+
+
+def test_dead_zone_is_reported_in_price_basis_points_and_checked_against_break_even():
+    dead_zone_bps = _dead_zone_basis_points(1_480, "0.01", "7400")
+    assert dead_zone_bps == pytest.approx(20.0)
+
+    with pytest.raises(ValueError, match="near the configured break-even move"):
+        _validate_break_even_dead_zone(1, "0.01", "7400", 20.0)
+    assert _validate_break_even_dead_zone(1_480, "0.01", "7400", 20.0) == pytest.approx(20.0)
+
+
+def test_hit_rate_confidence_interval_bootstraps_non_overlapping_utc_hour_blocks():
+    hour_ns = 3_600_000_000_000
+    timestamps = np.array(
+        [
+            hour * hour_ns + offset
+            for hour in range(4)
+            for offset in (0, 10_000_000_000, hour_ns - 2_000_000_000)
+        ],
+        dtype=np.int64,
+    )
+    eligible = np.ones(timestamps.size, dtype=bool)
+    correct = np.array(
+        [True, True, True, False, True, False, False, False, True, False, True, True]
+    )
+
+    first = _block_bootstrap_confidence_interval(
+        timestamps, correct, eligible, horizon_seconds=3, seed=17
+    )
+    second = _block_bootstrap_confidence_interval(
+        timestamps, correct, eligible, horizon_seconds=3, seed=17
+    )
+
+    assert first == second
+    assert first["block_count"] == 4
+    assert first["sample_count"] == 8
+    assert 0.0 <= first["lower"] <= first["upper"] <= 1.0
+    assert first["lower"] < first["upper"]

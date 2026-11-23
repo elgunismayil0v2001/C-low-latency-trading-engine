@@ -228,17 +228,26 @@ continue to multi-day evaluation, but not to claim a strategy works.
 ## Labeling, training and inference (milestone 6)
 
 `label_features` streams a `.tbf` feature dump into a versioned `.tfl` file. Direction labels are
-down=0, flat=1, up=2, with `abs(return_ticks) < k` as the flat class (`k=1` by default); return
+down=0, flat=1, up=2, with `abs(return_ticks) < k` as the flat class; return
 labels store the forward return in integer ticks. The label dump retains the timestamp and all 11
 features. Its header records symbol, horizon, label kind and dead-zone value.
 
 `python/train.py` combines labelled dumps in timestamp order and uses expanding walk-forward folds
 on whole UTC days. It purges training rows whose forward-label horizon reaches the test-day
-boundary and never shuffles. Direction training uses weighted cross-entropy; return training uses
-Huber loss. Each fold fits feature normalization from its training rows only. `metrics.json`
-records fold metrics against both the `imbalance_l1` sign baseline and logistic regression on all
-features. The final checkpoint uses the last fold's training split. It is exported to the validated
-little-endian `weights.bin` format with CRC32 and training-only normalization statistics.
+boundary, then shuffles mini-batches within that fold's training rows only. Direction training
+uses weighted cross-entropy; return training uses Huber loss. Each fold fits feature normalization
+from its training rows only. `metrics.json` records fold metrics against both the `imbalance_l1`
+sign baseline and logistic regression on all features, with 95% percentile-bootstrap confidence
+intervals from non-overlapping UTC-hour blocks. Each block's final label horizon is purged before
+resampling. The final checkpoint uses the last fold's training split. It is exported to the
+validated little-endian `weights.bin` format with CRC32 and training-only normalization statistics.
+
+Direction training requires a dead zone within 25% of the configured break-even move and a
+reference price so it can report both ticks and basis points. The default break-even move is
+20 bps, the fee-only round-trip cost for two fills at the configured 10 bps taker fee; spread is
+not included. For this sample, 1,480 ticks at a $0.01 tick and a $7,400 reference price equals
+20.00 bps. The absolute tick threshold is shared across monthly files, so the actual bps varies
+with each month's market price.
 
 The inference model has 11 inputs, two 16-unit ReLU layers, and either one return output or three
 direction logits. Sixteen units were selected after measurement to keep the combined replay median
@@ -252,26 +261,31 @@ Example workflow (training requires labelled dumps from at least three distinct 
 
     build/dump_features BTCUSDT.bin BTCUSDT-features.tbf --price-tick 1
     build/label_features BTCUSDT-features.tbf BTCUSDT-3s-direction.tfl \
-      --kind direction --horizon 3 --dead-zone-ticks 1
+      --kind direction --horizon 3 --dead-zone-ticks 1480
     python python/train.py --input BTCUSDT-2019-12-01.tfl BTCUSDT-2020-01-01.tfl \
-      BTCUSDT-2020-02-01.tfl --task direction --output-dir model
+      BTCUSDT-2020-02-01.tfl --task direction --output-dir model \
+      --price-tick 0.01 --reference-price 7400.00 --break-even-move-bps 20
     python python/export_weights.py model/checkpoint.npz model/weights.bin
 
-The local 3-second direction and return models used BTCUSDT samples from 2019-10-01 and
-2019-11-01 for training, with 2019-12-01 held out. This was one expanding fold with 1,522,723
-training rows and 820,028 test rows from 2,342,751 total samples; training used seed 42 and 20
-epochs. Results on the held-out day:
+The local 3-second direction model used a 1,480-tick dead zone (20.00 bps at the $7,400 reference
+price) on BTCUSDT samples from 2019-10-01 and 2019-11-01 for training, with 2019-12-01 held out.
+This was one expanding fold with 1,522,723 training rows and 820,028 test rows from 2,342,751 total
+samples; training used seed 42 and 20 epochs. Only 67 test rows were non-flat at this break-even
+threshold. The 95% intervals below resample eight non-overlapping UTC-hour blocks and are too wide
+to distinguish the MLP from either baseline. The shuffled return model has no dead zone; its hit
+rate covers 801,187 non-flat rows and its intervals use 24 non-overlapping UTC-hour blocks:
 
 | Task | MLP directional hit rate | `imbalance_l1` sign baseline | Logistic all-feature baseline | Other MLP metrics |
 | --- | ---: | ---: | ---: | --- |
-| Direction | 51.72% (51.66% overall accuracy) | 55.64% | 64.52% | — |
-| Return | 65.34% | 55.50% | 64.19% | MAE 86.37 ticks; RMSE 143.89 ticks |
+| Direction, 1,480 ticks / 20.00 bps | 71.64% (95% CI 38.30–89.41%) | 64.18% (49.21–84.45%) | 55.22% (27.02–82.77%) | 67 non-flat test rows |
+| Return, no dead zone | 65.35% (64.70–65.95%) | 55.50% (54.96–56.07%) | 64.68% (63.82–65.40%) | MAE 85.76 ticks; RMSE 142.58 ticks |
 
-The direction model fell below both baselines. The return model was 1.15 percentage points above
-the logistic hit rate on this one held-out day. One test day does not establish a repeatable edge;
-the simulated execution result is reported below, but independent-day evidence is still missing. The trained
-checkpoints, metrics and exported weights are kept under `/private/tmp/tickbook-m6-training` and
-were not added to the repository.
+The direction result is not distinguishable from either baseline with these confidence intervals.
+The return model was 0.67 percentage points above the logistic hit rate on this one held-out day;
+their block intervals overlap. One test day does not establish a repeatable edge; the simulated
+execution result is reported below, but independent-day evidence is still missing. The new
+checkpoints and metrics are kept under `/private/tmp/tickbook-break-even-training` and were not
+added to the repository.
 
 The committed tiny weights are deterministic synthetic test data, not trained trading weights.
 The C++/PyTorch parity test compares 1,000 fixed vectors at `1e-5` tolerance. It is wired into the
@@ -366,11 +380,12 @@ processing histogram. Percentiles use the fixed log-linear buckets and subtract 
 `steady_clock` read overhead. This is replay processing time, not live or trading latency.
 
 For one local held-out day (Binance BTCUSDT 2019-12-01, 6,907,104 events and 1,236,542 messages),
-the 3-second return model with 5 ms simulated order latency and the default 10 bps taker fee had
-gross P&L -$148.90, fees $2,513.93, net P&L -$2,662.84, 20,545 closed trades and a 0% hit rate.
-At replay end the model still held 0.009 BTC and had 0.001 BTC of unfilled market quantity; P&L
-includes the open position marked to mid. The threshold baseline also lost net of fees. This single
-day is not evidence of profitability; these negative results do not establish an out-of-sample edge.
+the shuffled 3-second return model with 5 ms simulated order latency and the default 10 bps taker
+fee had gross P&L -$176.19, fees $2,769.51, net P&L -$2,945.70 and 22,229 closed trades. The book
+uses the fixed first-price window and ignores later out-of-window levels; `compare_books` diverges
+at event 2,919,723 on this file, so treat this run as a bounded-book simulation, not as a full-depth
+replay. This single day is not evidence of profitability; the negative result does not establish
+an out-of-sample edge.
 
 The Release benchmark used the same held-out file and configuration, with one warm-up pass and five
 measured runs per strategy, separated by a 5-second cool-down. Hardware: Apple M2 MacBook Air, 8 GB,
