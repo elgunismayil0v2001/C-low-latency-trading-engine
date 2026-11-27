@@ -191,7 +191,7 @@ and `concurrency` with cancel-in-progress per branch. Cache with ccache. Pin Goo
 | `fuzz-smoke` | each fuzz target for 60 s with the committed corpus (clang) | required |
 | `static` | `clang-format --dry-run --Werror`, `clang-tidy` (bugprone, performance, concurrency checks) on `include/` and `tools/` | required |
 | `python` | `pytest`, then build the C++ parity test and run it against the committed tiny weights | required |
-| `alloc-check` | Release build; run replay on the fixture and assert the hot-path allocation count is 0 | required |
+| `alloc-check` | Release build; run replay on the fixture and assert the hot-path allocation count is 0 (the checker is a stub that reports "skipped" under TSan, which defines its own operator new/delete) | required |
 | `bench` | Release benchmark on a fixed fixture; upload JSON and a markdown table as artifacts | not gating |
 | `coverage` | gcov/lcov report as an artifact | not gating |
 

@@ -172,10 +172,13 @@ jobs:
             -DCMAKE_CXX_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage
           cmake --build build/coverage --parallel
           ctest --test-dir build/coverage --output-on-failure
-          lcov --ignore-errors inconsistent,inconsistent --capture --directory build/coverage \
+          # GCC 13 emits end-line data that lcov 2.x flags as "mismatched end line" for some
+          # multi-line test statements; that is a tool quirk, so demote it to a warning.
+          lcov --ignore-errors inconsistent,inconsistent,mismatch,mismatch \
+            --capture --directory build/coverage \
             --output-file build/coverage/coverage.info
-          lcov --extract build/coverage/coverage.info '*/include/tickbook/*' \
-            --output-file build/coverage/include-coverage.info
+          lcov --ignore-errors unused,unused --extract build/coverage/coverage.info \
+            '*/include/tickbook/*' --output-file build/coverage/include-coverage.info
       - uses: actions/upload-artifact@v4
         with:
           name: include-coverage

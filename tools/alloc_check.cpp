@@ -22,6 +22,27 @@
 #include "tickbook/ring_buffer.hpp"
 #include "tickbook/types.hpp"
 
+// ThreadSanitizer's runtime already defines the global operator new/delete family, so defining
+// them here as well causes duplicate-symbol link errors. Under TSan the checker is therefore
+// built as a stub that reports a skip; the dedicated Release alloc-check job still enforces the
+// zero-allocation gate.
+#if defined(__SANITIZE_THREAD__)
+#define TICKBOOK_ALLOC_CHECK_TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define TICKBOOK_ALLOC_CHECK_TSAN 1
+#endif
+#endif
+
+#if defined(TICKBOOK_ALLOC_CHECK_TSAN)
+
+int main() {
+  std::cout << "alloc_check skipped: allocation counting is not available under ThreadSanitizer\n";
+  return 0;
+}
+
+#else
+
 namespace {
 
 thread_local bool count_this_thread = false;
@@ -109,30 +130,80 @@ bool write_fixture(const std::filesystem::path& path,
 
 } // namespace
 
-void* operator new(std::size_t size) {
-  if (void* memory = std::malloc(size == 0 ? 1 : size)) {
-    record_allocation();
-    return memory;
-  }
-  throw std::bad_alloc{};
+namespace {
+
+[[gnu::noinline]] void* allocate_plain(std::size_t size) noexcept {
+  void* memory = std::malloc(size == 0 ? 1 : size);
+  if (memory != nullptr) record_allocation();
+  return memory;
 }
 
-void* operator new[](std::size_t size) { return ::operator new(size); }
-
-// Keep runtime deallocation paired with these allocations. TSan supplies the aligned array
-// delete definitions.
-void* operator new(std::size_t size, std::align_val_t alignment) {
+[[gnu::noinline]] void* allocate_aligned(std::size_t size, std::align_val_t alignment) noexcept {
   void* memory = nullptr;
-  const auto alignment_size = static_cast<std::size_t>(alignment);
+  auto alignment_size = static_cast<std::size_t>(alignment);
+  if (alignment_size < sizeof(void*)) alignment_size = sizeof(void*);
   if (posix_memalign(&memory, alignment_size, size == 0 ? alignment_size : size) != 0) {
-    throw std::bad_alloc{};
+    return nullptr;
   }
   record_allocation();
   return memory;
 }
 
+// Kept out of line so GCC cannot inline a bare free() into operator delete and then report
+// -Wmismatched-new-delete against the (also out-of-line) allocation helpers above.
+[[gnu::noinline]] void release(void* memory) noexcept { std::free(memory); }
+
+} // namespace
+
+// Every allocation below comes from malloc or posix_memalign, and every deallocation form
+// returns it with free (through release()). Replacing the complete family keeps new/delete (and
+// new[]/delete[]) paired for GCC's -Wmismatched-new-delete and for ASan's alloc-dealloc-mismatch
+// check, which would otherwise see malloc-backed memory released by the runtime's own operator
+// delete.
+void* operator new(std::size_t size) {
+  if (void* memory = allocate_plain(size)) return memory;
+  throw std::bad_alloc{};
+}
+void* operator new[](std::size_t size) {
+  if (void* memory = allocate_plain(size)) return memory;
+  throw std::bad_alloc{};
+}
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+  return allocate_plain(size);
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+  return allocate_plain(size);
+}
+void* operator new(std::size_t size, std::align_val_t alignment) {
+  if (void* memory = allocate_aligned(size, alignment)) return memory;
+  throw std::bad_alloc{};
+}
 void* operator new[](std::size_t size, std::align_val_t alignment) {
-  return ::operator new(size, alignment);
+  if (void* memory = allocate_aligned(size, alignment)) return memory;
+  throw std::bad_alloc{};
+}
+void* operator new(std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  return allocate_aligned(size, alignment);
+}
+void* operator new[](std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  return allocate_aligned(size, alignment);
+}
+
+void operator delete(void* memory) noexcept { release(memory); }
+void operator delete[](void* memory) noexcept { release(memory); }
+void operator delete(void* memory, std::size_t) noexcept { release(memory); }
+void operator delete[](void* memory, std::size_t) noexcept { release(memory); }
+void operator delete(void* memory, const std::nothrow_t&) noexcept { release(memory); }
+void operator delete[](void* memory, const std::nothrow_t&) noexcept { release(memory); }
+void operator delete(void* memory, std::align_val_t) noexcept { release(memory); }
+void operator delete[](void* memory, std::align_val_t) noexcept { release(memory); }
+void operator delete(void* memory, std::size_t, std::align_val_t) noexcept { release(memory); }
+void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept { release(memory); }
+void operator delete(void* memory, std::align_val_t, const std::nothrow_t&) noexcept {
+  release(memory);
+}
+void operator delete[](void* memory, std::align_val_t, const std::nothrow_t&) noexcept {
+  release(memory);
 }
 
 int main(int argc, char** argv) {
@@ -258,3 +329,5 @@ int main(int argc, char** argv) {
   }
   return 0;
 }
+
+#endif // TICKBOOK_ALLOC_CHECK_TSAN
