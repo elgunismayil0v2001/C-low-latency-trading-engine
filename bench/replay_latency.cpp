@@ -427,31 +427,8 @@ template <OrderBook Book>
 
 } // namespace
 
-void* operator new(std::size_t size) {
-  if (void* memory = std::malloc(size == 0 ? 1 : size)) {
-    record_allocation();
-    return memory;
-  }
-  throw std::bad_alloc{};
-}
-
-void* operator new[](std::size_t size) { return ::operator new(size); }
-
-// Keep runtime deallocation paired with these allocations. TSan supplies the aligned array
-// delete definitions.
-void* operator new(std::size_t size, std::align_val_t alignment) {
-  void* memory = nullptr;
-  const auto alignment_size = static_cast<std::size_t>(alignment);
-  if (posix_memalign(&memory, alignment_size, size == 0 ? alignment_size : size) != 0) {
-    throw std::bad_alloc{};
-  }
-  record_allocation();
-  return memory;
-}
-
-void* operator new[](std::size_t size, std::align_val_t alignment) {
-  return ::operator new(size, alignment);
-}
+#define TICKBOOK_ALLOC_HOOK record_allocation
+#include "counting_new_delete.hpp"
 
 int main(int argc, char** argv) try {
   if (argc == 2 && std::string_view(argv[1]) == "--help") {

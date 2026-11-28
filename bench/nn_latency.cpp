@@ -46,8 +46,8 @@ void note_allocation() noexcept {
   std::uint64_t minimum_positive_delta = std::numeric_limits<std::uint64_t>::max();
   for (std::size_t sample = 0; sample < 100'000; ++sample) {
     const auto current = now_ns();
-    if (current > previous) minimum_positive_delta = std::min(minimum_positive_delta,
-                                                               current - previous);
+    if (current > previous)
+      minimum_positive_delta = std::min(minimum_positive_delta, current - previous);
     previous = current;
   }
   return minimum_positive_delta == std::numeric_limits<std::uint64_t>::max()
@@ -92,19 +92,8 @@ void note_allocation() noexcept {
 
 } // namespace
 
-void* operator new(std::size_t size) {
-  if (void* memory = std::malloc(size == 0 ? 1 : size)) {
-    note_allocation();
-    return memory;
-  }
-  throw std::bad_alloc{};
-}
-
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* memory) noexcept { std::free(memory); }
-void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
-void operator delete[](void* memory) noexcept { ::operator delete(memory); }
-void operator delete[](void* memory, std::size_t) noexcept { ::operator delete(memory); }
+#define TICKBOOK_ALLOC_HOOK note_allocation
+#include "counting_new_delete.hpp"
 
 int main(int argc, char** argv) try {
   if (argc < 2) {
