@@ -318,9 +318,20 @@ template <OrderBook Book>
   // The acquire observes the producer's release after it filled the ring before timing.
   while (!producer_ready.load(std::memory_order_acquire)) cpu_pause();
 
+    // The asserted fault count is scoped to this (consumer) thread on Linux: it is the thread that
+    // runs the book, features and inference. The producer thread reads the memory-mapped replay
+    // file, and first-touch faults on those file pages are a property of the input, not of the hot
+    // path, so the process-wide count is reported separately and not asserted.
+#if defined(__linux__)
+  constexpr int kUsageWho = RUSAGE_THREAD;
+#else
+  constexpr int kUsageWho = RUSAGE_SELF;
+#endif
   rusage before{};
   rusage after{};
-  constexpr int kUsageWho = RUSAGE_SELF;
+  rusage process_before{};
+  rusage process_after{};
+  const bool got_process_before = ::getrusage(RUSAGE_SELF, &process_before) == 0;
   const bool got_before = ::getrusage(kUsageWho, &before) == 0;
 
   std::uint64_t consumed = 0;
@@ -360,6 +371,7 @@ template <OrderBook Book>
     cpu_pause();
   }
   const bool got_after = ::getrusage(kUsageWho, &after) == 0;
+  const bool got_process_after = ::getrusage(RUSAGE_SELF, &process_after) == 0;
   producer.join();
   const auto measured_allocations = allocation_tracking.stop();
 
@@ -375,7 +387,7 @@ template <OrderBook Book>
     error = "feature engine rejected the replay event stream";
     return false;
   }
-  if (!got_before || !got_after) {
+  if (!got_before || !got_after || !got_process_before || !got_process_after) {
     error = "cannot read minor page-fault counters around measured replay";
     return false;
   }
@@ -388,6 +400,7 @@ template <OrderBook Book>
     return false;
   }
   const auto minor_faults = after.ru_minflt - before.ru_minflt;
+  const auto process_minor_faults = process_after.ru_minflt - process_before.ru_minflt;
 
   const auto p50 = histogram.percentile_upper_ns(5000);
   const auto p99 = histogram.percentile_upper_ns(9900);
@@ -412,11 +425,12 @@ template <OrderBook Book>
             << "max_ns=" << histogram.maximum_ns() << '\n'
             << "minor_faults_before=" << before.ru_minflt << '\n'
             << "minor_faults_after=" << after.ru_minflt << '\n'
-            << "minor_faults=" << minor_faults << '\n';
+            << "minor_faults=" << minor_faults << '\n'
+            << "minor_faults_process_report_only=" << process_minor_faults << '\n';
 #if defined(__linux__)
-  std::cout << "minor_fault_assertion=zero_required\n";
+  std::cout << "minor_fault_assertion=zero_required_consumer_thread\n";
   if (minor_faults != 0) {
-    error = "measured replay incurred minor page faults";
+    error = "measured replay incurred minor page faults on the consumer thread";
     return false;
   }
 #else
